@@ -1,0 +1,22 @@
+# data/ directory for database and output files
+*.db
+output/
+
+# Browser profile (contains login session)
+browser_data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+
+# Debug files
+debug_*.html
+debug_*.py
+
+# OS
+.DS_Store
+
+# Environment variables (contains credentials)
+.env
