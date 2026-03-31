@@ -20,3 +20,6 @@ debug_*.py
 
 # Environment variables (contains credentials)
 .env
+
+# Session cookies (sensitive)
+cookies.json
