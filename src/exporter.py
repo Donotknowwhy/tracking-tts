@@ -1,10 +1,28 @@
 import csv
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import config
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill
 from openpyxl.utils import get_column_letter
+
+# Delta highlight (Sold T2 - Sold T1): red if > 5, yellow if > 3 (red takes precedence)
+_FILL_DELTA_RED = PatternFill(start_color="FFE8B4B4", end_color="FFE8B4B4", fill_type="solid")
+_FILL_DELTA_YELLOW = PatternFill(start_color="FFFFF2CC", end_color="FFFFF2CC", fill_type="solid")
+
+
+def _fill_for_delta(delta: Any) -> Optional[PatternFill]:
+    if delta is None:
+        return None
+    try:
+        d = int(delta)
+    except (TypeError, ValueError):
+        return None
+    if d > 5:
+        return _FILL_DELTA_RED
+    if d > 3:
+        return _FILL_DELTA_YELLOW
+    return None
 
 def export_to_csv(analysis_results: List[Dict[str, Any]], 
                   keywords_results: List[Dict[str, Any]],
@@ -28,29 +46,28 @@ def export_to_csv(analysis_results: List[Dict[str, Any]],
     with open(products_csv, 'w', newline='', encoding='utf-8') as f:
         if analysis_results:
             fieldnames = [
-                'rank',
+                'rank_by_growth',
                 'product_url',
                 'product_title',
                 'sold_t1',
                 'sold_t2',
                 'sold_delta',
                 'growth_rate_percent',
-                'rank_by_growth'
             ]
             
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             
             for row in analysis_results:
+                rg = row.get('rank_by_growth')
                 writer.writerow({
-                    'rank': row['rank_by_delta'],
+                    'rank_by_growth': rg if rg is not None else 'N/A',
                     'product_url': row['product_url'],
                     'product_title': row['product_title'],
                     'sold_t1': row['sold_t1'],
                     'sold_t2': row['sold_t2'],
                     'sold_delta': row['delta'],
                     'growth_rate_percent': f"{row['growth_rate']:.2%}",
-                    'rank_by_growth': row.get('rank_by_growth', 'N/A')
                 })
     
     # Keywords CSV
@@ -82,28 +99,34 @@ def export_to_excel(analysis_results: List[Dict[str, Any]],
     ws_products.title = "Products"
 
     product_headers = [
-        "Rank",
+        "Rank by Growth",
         "Product URL",
         "Product Title",
         "Sold T1",
         "Sold T2",
         "Sold Delta",
         "Growth Rate (%)",
-        "Rank by Growth"
     ]
     ws_products.append(product_headers)
 
     for row in analysis_results:
+        rg = row.get("rank_by_growth")
         ws_products.append([
-            row["rank_by_delta"],
+            rg if rg is not None else "N/A",
             row["product_url"],
             row["product_title"],
             row["sold_t1"],
             row["sold_t2"],
             row["delta"],
             f"{row['growth_rate'] * 100:.2f}%",
-            row.get("rank_by_growth", "N/A"),
         ])
+
+    ncols = len(product_headers)
+    for r_idx, arow in enumerate(analysis_results, start=2):
+        fill = _fill_for_delta(arow.get("delta"))
+        if fill:
+            for c in range(1, ncols + 1):
+                ws_products.cell(row=r_idx, column=c).fill = fill
 
     ws_keywords = wb.create_sheet("Keywords")
     keyword_headers = ["Rank", "Keyword", "Type", "Frequency"]
@@ -200,7 +223,9 @@ def print_summary(analysis_results: List[Dict[str, Any]],
     
     print(f"\n🏆 TOP 10 PRODUCTS BY GROWTH (Delta):\n")
     
-    for i, product in enumerate(analysis_results[:10], 1):
+    ranked = [p for p in analysis_results if p.get('rank_by_growth') is not None]
+    ranked.sort(key=lambda x: x['rank_by_growth'])
+    for i, product in enumerate(ranked[:10], 1):
         print(f"{i}. {product['product_title'][:60]}")
         print(f"   Sold: {product['sold_t1']} → {product['sold_t2']} "
               f"(+{product['delta']}, {product['growth_rate']:.1%} growth)")

@@ -1,7 +1,7 @@
 import asyncio
 import random
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Callable
 from playwright.async_api import async_playwright, Browser, Page, BrowserContext
 import config
 from src.parser import parse_product_page, extract_product_id
@@ -243,28 +243,38 @@ class TikTokScraper:
             'error_message': 'All retries failed'
         }
     
-    async def fetch_products(self, urls: list) -> list:
+    async def fetch_products(
+        self,
+        urls: list,
+        on_progress: Optional[Callable[[int, int], Any]] = None,
+    ) -> list:
         """
         Fetch multiple products sequentially
-        
+
         Args:
             urls: List of product URLs
-        
+            on_progress: Optional callback(completed_count, total) after each URL
+                (also called once at start with (0, total)).
+
         Returns:
             List of product data dicts
         """
         results = []
         total = len(urls)
-        
+        if on_progress:
+            on_progress(0, total)
+
         for idx, url in enumerate(urls, 1):
             logger.info(f"Progress: {idx}/{total}")
-            
+
             result = await self.fetch_product(url)
             results.append(result)
-            
+            if on_progress:
+                on_progress(idx, total)
+
             # Progress indicator
             if idx % 10 == 0:
                 success_count = sum(1 for r in results if r['status'] == 'success')
                 logger.info(f"Processed {idx}/{total} - Success: {success_count}")
-        
+
         return results

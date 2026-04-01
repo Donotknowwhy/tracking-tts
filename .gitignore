@@ -1,6 +1,7 @@
 # data/ directory for database and output files
 *.db
 output/
+data/output/
 
 # Browser profile (contains login session)
 browser_data/

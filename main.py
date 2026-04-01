@@ -9,6 +9,7 @@ import logging
 from pathlib import Path
 from datetime import datetime, timedelta
 import sys
+from typing import Any, Callable, Optional
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -32,7 +33,12 @@ def read_urls_from_file(filepath: str) -> list:
         urls = [line.strip() for line in f if line.strip() and not line.startswith('#')]
     return urls
 
-async def run_snapshot(urls: list, session_id: int, snapshot_order: int):
+async def run_snapshot(
+    urls: list,
+    session_id: int,
+    snapshot_order: int,
+    on_progress: Optional[Callable[[int, int], Any]] = None,
+):
     """
     Run a snapshot: fetch all products and save to database
     
@@ -40,6 +46,7 @@ async def run_snapshot(urls: list, session_id: int, snapshot_order: int):
         urls: List of product URLs
         session_id: Database session ID
         snapshot_order: 1 for first snapshot, 2 for second
+        on_progress: Optional callback(completed, total) during fetch
     """
     db = Database()
     
@@ -47,7 +54,7 @@ async def run_snapshot(urls: list, session_id: int, snapshot_order: int):
     logger.info(f"Total products to fetch: {len(urls)}")
     
     async with TikTokScraper() as scraper:
-        results = await scraper.fetch_products(urls)
+        results = await scraper.fetch_products(urls, on_progress=on_progress)
     
     # Save to database
     logger.info("Saving results to database...")

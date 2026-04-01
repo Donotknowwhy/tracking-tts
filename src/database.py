@@ -58,12 +58,13 @@ class Database:
                 sold_t2 INTEGER,
                 delta INTEGER,
                 growth_rate REAL,
-                rank_by_delta INTEGER,
                 rank_by_growth INTEGER,
                 PRIMARY KEY (session_id, product_id),
                 FOREIGN KEY (session_id) REFERENCES sessions(session_id)
             )
         """)
+
+        self._migrate_drop_rank_by_delta(cursor)
         
         # Keywords table
         cursor.execute("""
@@ -80,6 +81,16 @@ class Database:
         
         conn.commit()
         conn.close()
+
+    def _migrate_drop_rank_by_delta(self, cursor):
+        """Remove legacy rank_by_delta column (merged into rank_by_growth). SQLite 3.35+."""
+        cursor.execute("PRAGMA table_info(analysis)")
+        cols = [row[1] for row in cursor.fetchall()]
+        if cols and 'rank_by_delta' in cols:
+            try:
+                cursor.execute("ALTER TABLE analysis DROP COLUMN rank_by_delta")
+            except sqlite3.OperationalError:
+                pass
     
     def create_session(self, check_interval_hours: float, total_products: int) -> int:
         """Create a new tracking session"""
@@ -142,8 +153,8 @@ class Database:
             cursor.execute("""
                 INSERT OR REPLACE INTO analysis
                 (session_id, product_id, product_url, product_title,
-                 sold_t1, sold_t2, delta, growth_rate, rank_by_delta, rank_by_growth)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 sold_t1, sold_t2, delta, growth_rate, rank_by_growth)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 session_id,
                 item['product_id'],
@@ -153,8 +164,7 @@ class Database:
                 item['sold_t2'],
                 item['delta'],
                 item['growth_rate'],
-                item['rank_by_delta'],
-                item['rank_by_growth']
+                item['rank_by_growth'],
             ))
         
         conn.commit()
@@ -190,7 +200,7 @@ class Database:
         cursor.execute("""
             SELECT * FROM analysis
             WHERE session_id = ?
-            ORDER BY rank_by_delta
+            ORDER BY (rank_by_growth IS NULL), rank_by_growth, delta DESC
         """, (session_id,))
         
         rows = cursor.fetchall()

@@ -49,24 +49,28 @@ def compute_growth(snapshots_t1: List[Dict[str, Any]],
             'sold_t2': sold_t2,
             'delta': delta,
             'growth_rate': growth_rate,
-            'rank_by_delta': 0,  # Will be set later
-            'rank_by_growth': 0  # Will be set later
+            'rank_by_growth': None,
         })
     
-    # Rank by delta (descending)
-    results_by_delta = sorted(results, key=lambda x: x['delta'], reverse=True)
-    for rank, item in enumerate(results_by_delta, 1):
-        item['rank_by_delta'] = rank
-    
-    # Rank by growth_rate (descending) - only for products with sold_t1 > 10
-    results_by_growth = sorted(
-        [r for r in results if r['sold_t1'] > 10],
-        key=lambda x: x['growth_rate'],
-        reverse=True
+    # Rank by growth = volume change (delta) descending; ties: lower % growth ranks higher.
+    # Only delta >= 0 get a rank (negative deltas: e.g. shop ban / data anomaly — no rank).
+    eligible = [r for r in results if r['delta'] >= 0]
+    eligible_sorted = sorted(
+        eligible,
+        key=lambda x: (-x['delta'], x['growth_rate']),
     )
-    for rank, item in enumerate(results_by_growth, 1):
+    for rank, item in enumerate(eligible_sorted, 1):
         item['rank_by_growth'] = rank
-    
+
+    # Stable display order: ranked first, then unranked (typically delta < 0)
+    results.sort(
+        key=lambda x: (
+            x['rank_by_growth'] is None,
+            x['rank_by_growth'] if x['rank_by_growth'] is not None else 0,
+            -x['delta'],
+        )
+    )
+
     return results
 
 def extract_keywords(analysis_results: List[Dict[str, Any]], 

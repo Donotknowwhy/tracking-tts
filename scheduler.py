@@ -19,6 +19,8 @@ except ImportError:
     print("Install with: pip install apscheduler")
     sys.exit(1)
 
+from typing import Any, Callable, Optional
+
 import config
 from src.database import Database
 from src.scraper import TikTokScraper
@@ -36,12 +38,18 @@ class TrackingScheduler:
         self.scheduler = AsyncIOScheduler()
         self.db = Database()
     
-    async def run_snapshot(self, urls: list, session_id: int, snapshot_order: int):
+    async def run_snapshot(
+        self,
+        urls: list,
+        session_id: int,
+        snapshot_order: int,
+        on_progress: Optional[Callable[[int, int], Any]] = None,
+    ):
         """Run a snapshot"""
         logger.info(f"[Session {session_id}] Running snapshot {snapshot_order}")
         
         async with TikTokScraper() as scraper:
-            results = await scraper.fetch_products(urls)
+            results = await scraper.fetch_products(urls, on_progress=on_progress)
         
         success_count = 0
         for result in results:
