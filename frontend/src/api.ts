@@ -1,4 +1,4 @@
-/** Base URL của FastAPI (Oracle / máy chủ API). Để trống khi dev: Vite proxy /api → localhost:8000. */
+/** Base URL FastAPI. Để trống: dev dùng Vite proxy; production Vercel dùng vercel.json proxy /api → backend (tránh mixed content). */
 const API_BASE = (
   import.meta.env.VITE_API_BASE_URL as string | undefined
 )?.replace(/\/$/, '') ?? ''
