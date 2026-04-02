@@ -104,9 +104,15 @@ def run_analysis(session_id: int):
     
     # Save analysis
     db.save_analysis(session_id, analysis_results)
-    
+
+    sess = db.get_session(session_id)
+    seo_raw = (sess or {}).get("seo_keywords") or ""
+
     # Extract keywords
-    keywords_results = extract_keywords(analysis_results)
+    keywords_results = extract_keywords(
+        analysis_results,
+        seo_keywords_raw=seo_raw,
+    )
     
     if keywords_results:
         db.save_keywords(session_id, keywords_results)

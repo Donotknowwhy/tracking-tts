@@ -25,7 +25,8 @@ class Database:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 check_interval_hours REAL,
                 total_products INTEGER,
-                status TEXT DEFAULT 'in_progress'
+                status TEXT DEFAULT 'in_progress',
+                seo_keywords TEXT
             )
         """)
         
@@ -65,7 +66,8 @@ class Database:
         """)
 
         self._migrate_drop_rank_by_delta(cursor)
-        
+        self._migrate_sessions_seo_keywords(cursor)
+
         # Keywords table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS keywords (
@@ -74,11 +76,14 @@ class Database:
                 keyword_type TEXT,
                 frequency INTEGER,
                 rank INTEGER,
+                keyword_bucket TEXT DEFAULT 'niche',
                 PRIMARY KEY (session_id, keyword),
                 FOREIGN KEY (session_id) REFERENCES sessions(session_id)
             )
         """)
-        
+
+        self._migrate_keywords_bucket(cursor)
+
         conn.commit()
         conn.close()
 
@@ -91,16 +96,41 @@ class Database:
                 cursor.execute("ALTER TABLE analysis DROP COLUMN rank_by_delta")
             except sqlite3.OperationalError:
                 pass
-    
-    def create_session(self, check_interval_hours: float, total_products: int) -> int:
+
+    def _migrate_sessions_seo_keywords(self, cursor):
+        cursor.execute("PRAGMA table_info(sessions)")
+        cols = [row[1] for row in cursor.fetchall()]
+        if cols and "seo_keywords" not in cols:
+            try:
+                cursor.execute("ALTER TABLE sessions ADD COLUMN seo_keywords TEXT")
+            except sqlite3.OperationalError:
+                pass
+
+    def _migrate_keywords_bucket(self, cursor):
+        cursor.execute("PRAGMA table_info(keywords)")
+        cols = [row[1] for row in cursor.fetchall()]
+        if cols and "keyword_bucket" not in cols:
+            try:
+                cursor.execute(
+                    "ALTER TABLE keywords ADD COLUMN keyword_bucket TEXT DEFAULT 'niche'"
+                )
+            except sqlite3.OperationalError:
+                pass
+
+    def create_session(
+        self,
+        check_interval_hours: float,
+        total_products: int,
+        seo_keywords: Optional[str] = None,
+    ) -> int:
         """Create a new tracking session"""
         conn = self.get_connection()
         cursor = conn.cursor()
-        
+
         cursor.execute("""
-            INSERT INTO sessions (check_interval_hours, total_products)
-            VALUES (?, ?)
-        """, (check_interval_hours, total_products))
+            INSERT INTO sessions (check_interval_hours, total_products, seo_keywords)
+            VALUES (?, ?, ?)
+        """, (check_interval_hours, total_products, seo_keywords))
         
         session_id = cursor.lastrowid
         conn.commit()
@@ -178,14 +208,15 @@ class Database:
         for item in keywords_data:
             cursor.execute("""
                 INSERT OR REPLACE INTO keywords
-                (session_id, keyword, keyword_type, frequency, rank)
-                VALUES (?, ?, ?, ?, ?)
+                (session_id, keyword, keyword_type, frequency, rank, keyword_bucket)
+                VALUES (?, ?, ?, ?, ?, ?)
             """, (
                 session_id,
                 item['keyword'],
                 item['keyword_type'],
                 item['frequency'],
-                item['rank']
+                item['rank'],
+                item.get('keyword_bucket', 'niche'),
             ))
         
         conn.commit()

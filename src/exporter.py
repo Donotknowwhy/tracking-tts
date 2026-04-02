@@ -1,10 +1,33 @@
 import csv
 from datetime import datetime
 from typing import List, Dict, Any, Optional
-import config
+from zoneinfo import ZoneInfo
+
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill
 from openpyxl.utils import get_column_letter
+
+import config
+
+_VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+_UTC_TZ = ZoneInfo("UTC")
+
+
+def _format_scan_time_vn(value: Any) -> str:
+    """Hiển thị thời điểm quét URL; chuỗi SQLite (CURRENT_TIMESTAMP = UTC) → giờ VN."""
+    if value is None:
+        return ""
+    s = str(value).strip()
+    if not s:
+        return ""
+    try:
+        dt = datetime.fromisoformat(s.replace(" ", "T", 1))
+    except ValueError:
+        return s
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_UTC_TZ)
+    return dt.astimezone(_VN_TZ).strftime("%d/%m/%Y %H:%M:%S")
+
 
 # Delta highlight (Sold T2 - Sold T1): red if > 5, yellow if > 3 (red takes precedence)
 _FILL_DELTA_RED = PatternFill(start_color="FFE8B4B4", end_color="FFE8B4B4", fill_type="solid")
@@ -49,6 +72,8 @@ def export_to_csv(analysis_results: List[Dict[str, Any]],
                 'rank_by_growth',
                 'product_url',
                 'product_title',
+                'scanned_at_t1',
+                'scanned_at_t2',
                 'sold_t1',
                 'sold_t2',
                 'sold_delta',
@@ -64,6 +89,8 @@ def export_to_csv(analysis_results: List[Dict[str, Any]],
                     'rank_by_growth': rg if rg is not None else 'N/A',
                     'product_url': row['product_url'],
                     'product_title': row['product_title'],
+                    'scanned_at_t1': _format_scan_time_vn(row.get('scanned_at_t1')),
+                    'scanned_at_t2': _format_scan_time_vn(row.get('scanned_at_t2')),
                     'sold_t1': row['sold_t1'],
                     'sold_t2': row['sold_t2'],
                     'sold_delta': row['delta'],
@@ -75,13 +102,25 @@ def export_to_csv(analysis_results: List[Dict[str, Any]],
     
     with open(keywords_csv, 'w', newline='', encoding='utf-8') as f:
         if keywords_results:
-            fieldnames = ['rank', 'keyword', 'keyword_type', 'frequency']
-            
+            fieldnames = [
+                'rank',
+                'keyword_seo',
+                'keyword_niche',
+                'keyword_type',
+                'frequency',
+            ]
+
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
-            
+
             for row in keywords_results:
-                writer.writerow(row)
+                writer.writerow({
+                    'rank': row['rank'],
+                    'keyword_seo': row.get('keyword_seo', ''),
+                    'keyword_niche': row.get('keyword_niche', ''),
+                    'keyword_type': row['keyword_type'],
+                    'frequency': row['frequency'],
+                })
     
     return str(products_csv), str(keywords_csv)
 
@@ -102,6 +141,8 @@ def export_to_excel(analysis_results: List[Dict[str, Any]],
         "Rank by Growth",
         "Product URL",
         "Product Title",
+        "Thời gian quét T1",
+        "Thời gian quét T2",
         "Sold T1",
         "Sold T2",
         "Sold Delta",
@@ -115,6 +156,8 @@ def export_to_excel(analysis_results: List[Dict[str, Any]],
             rg if rg is not None else "N/A",
             row["product_url"],
             row["product_title"],
+            _format_scan_time_vn(row.get("scanned_at_t1")),
+            _format_scan_time_vn(row.get("scanned_at_t2")),
             row["sold_t1"],
             row["sold_t2"],
             row["delta"],
@@ -129,13 +172,20 @@ def export_to_excel(analysis_results: List[Dict[str, Any]],
                 ws_products.cell(row=r_idx, column=c).fill = fill
 
     ws_keywords = wb.create_sheet("Keywords")
-    keyword_headers = ["Rank", "Keyword", "Type", "Frequency"]
+    keyword_headers = [
+        "Rank",
+        "Keyword tối ưu SEO",
+        "Keyword niche",
+        "Loại",
+        "Tần suất",
+    ]
     ws_keywords.append(keyword_headers)
 
     for kw in keywords_results:
         ws_keywords.append([
             kw["rank"],
-            kw["keyword"],
+            kw.get("keyword_seo", ""),
+            kw.get("keyword_niche", ""),
             kw["keyword_type"],
             kw["frequency"],
         ])
@@ -233,10 +283,15 @@ def print_summary(analysis_results: List[Dict[str, Any]],
         print()
     
     print("\n" + "-"*80)
-    print(f"\n🔑 TOP 10 KEYWORDS:\n")
-    
+    print(f"\n🔑 TOP 10 KEYWORDS (SEO vs niche):\n")
+
     for kw in keywords_results[:10]:
-        print(f"{kw['rank']}. {kw['keyword']} "
-              f"({kw['keyword_type']}) - {kw['frequency']} occurrences")
+        seo = kw.get("keyword_seo") or ""
+        niche = kw.get("keyword_niche") or ""
+        label = f"SEO: {seo}" if seo else f"niche: {niche}"
+        print(
+            f"{kw['rank']}. {label} "
+            f"({kw['keyword_type']}) — {kw['frequency']} occurrences"
+        )
     
     print("\n" + "="*80)

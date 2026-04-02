@@ -79,8 +79,13 @@ class TrackingScheduler:
         
         analysis_results = compute_growth(snapshots_t1, snapshots_t2)
         self.db.save_analysis(session_id, analysis_results)
-        
-        keywords_results = extract_keywords(analysis_results)
+
+        sess = self.db.get_session(session_id)
+        seo_raw = (sess or {}).get("seo_keywords") or ""
+        keywords_results = extract_keywords(
+            analysis_results,
+            seo_keywords_raw=seo_raw,
+        )
         self.db.save_keywords(session_id, keywords_results)
         
         products_csv, keywords_csv = export_to_csv(

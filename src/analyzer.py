@@ -1,8 +1,34 @@
-from typing import List, Dict, Any
-from collections import Counter
+from typing import List, Dict, Any, Optional, Set
 import re
+from collections import Counter
 import config
 from src.parser import clean_title
+
+
+def parse_seo_blocklist(raw: Optional[str]) -> Set[str]:
+    """
+    Tách danh sách từ khóa user cho là chỉ để tối ưu SEO (mỗi dòng / dấu phẩy / chấm phẩy).
+    So khớp không phân biệt hoa thường.
+    """
+    if not raw or not str(raw).strip():
+        return set()
+    parts = re.split(r"[\n,;]+", str(raw))
+    return {p.strip().lower() for p in parts if p.strip()}
+
+
+def classify_keyword_bucket(keyword: str, seo_set: Set[str]) -> str:
+    """
+    Trả về 'seo' nếu cụm hoặc bất kỳ từ nào trong cụm khớp danh sách SEO; ngược lại 'niche'.
+    """
+    if not seo_set:
+        return "niche"
+    k = keyword.strip().lower()
+    if k in seo_set:
+        return "seo"
+    for tok in k.split():
+        if tok in seo_set:
+            return "seo"
+    return "niche"
 
 def compute_growth(snapshots_t1: List[Dict[str, Any]], 
                    snapshots_t2: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -50,6 +76,8 @@ def compute_growth(snapshots_t1: List[Dict[str, Any]],
             'delta': delta,
             'growth_rate': growth_rate,
             'rank_by_growth': None,
+            'scanned_at_t1': t1_data.get('timestamp'),
+            'scanned_at_t2': t2_data.get('timestamp'),
         })
     
     # Rank by growth = volume change (delta) descending; ties: lower % growth ranks higher.
@@ -73,20 +101,26 @@ def compute_growth(snapshots_t1: List[Dict[str, Any]],
 
     return results
 
-def extract_keywords(analysis_results: List[Dict[str, Any]], 
-                     top_n: int = None) -> List[Dict[str, Any]]:
+def extract_keywords(
+    analysis_results: List[Dict[str, Any]],
+    top_n: int = None,
+    seo_keywords_raw: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     """
-    Extract keywords from top-performing products
-    
+    Extract keywords from top-performing products.
+
     Args:
         analysis_results: Analysis results sorted by rank
         top_n: Number of top products to extract keywords from (defaults to config)
-    
+        seo_keywords_raw: Text từ user — các từ/cụm coi là SEO template để tách cột niche
+
     Returns:
-        List of keyword data with frequency and rank
+        List of keyword rows with keyword_seo / keyword_niche (một trong hai có giá trị), type, rank
     """
     if top_n is None:
         top_n = config.TRACKING_CONFIG['top_n_keywords']
+
+    seo_set = parse_seo_blocklist(seo_keywords_raw)
     
     # Filter: only products with meaningful delta
     filtered = [
@@ -173,9 +207,16 @@ def extract_keywords(analysis_results: List[Dict[str, Any]],
     all_keywords = sorted(all_keywords, key=lambda x: x['frequency'], reverse=True)
     for rank, item in enumerate(all_keywords[:10], 1):  # Top 10 overall
         item['rank'] = rank
-    
-    # Return only top 10
-    return all_keywords[:10]
+
+    top = all_keywords[:10]
+    for item in top:
+        kw = item["keyword"]
+        bucket = classify_keyword_bucket(kw, seo_set)
+        item["keyword_bucket"] = bucket
+        item["keyword_seo"] = kw if bucket == "seo" else ""
+        item["keyword_niche"] = kw if bucket == "niche" else ""
+
+    return top
 
 def filter_results(analysis_results: List[Dict[str, Any]],
                    min_delta: int = None) -> List[Dict[str, Any]]:

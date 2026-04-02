@@ -41,6 +41,19 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+**Giao diện web (React + Ant Design):** build ra `frontend/dist` trước khi chạy uvicorn (cần Node/npm trên server hoặc build trên máy rồi copy `dist/`):
+
+```bash
+cd frontend
+npm ci
+npm run build
+cd ..
+```
+
+Nếu chưa build, mở `http://...:8000/` sẽ báo 503; API vẫn dùng được tại `/api/...` và `/docs`.
+
+**Dev local (hot reload UI):** terminal 1: `uvicorn web_app:app --reload --port 8000`; terminal 2: `cd frontend && npm run dev` (Vite proxy `/api` và `/files` sang port 8000).
+
 Chạy web (chọn một cách):
 
 ```bash
