@@ -7,6 +7,10 @@
     {
       "source": "/files/:path*",
       "destination": "http://134.185.82.168:8000/files/:path*"
+    },
+    {
+      "source": "/jobs/:path*",
+      "destination": "/"
     }
   ]
 }
