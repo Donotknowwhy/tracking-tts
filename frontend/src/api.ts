@@ -61,10 +61,48 @@ export async function fetchJobs(): Promise<JobSummary[]> {
   return d.jobs ?? []
 }
 
+export function streamJobs(onData: (jobs: JobSummary[]) => void): () => void {
+  const es = new EventSource(apiUrl('/api/jobs/stream'))
+  es.onmessage = (e) => {
+    try {
+      const jobs = JSON.parse(e.data) as JobSummary[]
+      onData(jobs)
+    } catch {}
+  }
+  es.onerror = () => {
+    es.close()
+  }
+  return () => es.close()
+}
+
 export async function fetchJob(id: string): Promise<JobDetail> {
   const r = await fetch(apiUrl(`/api/jobs/${encodeURIComponent(id)}`))
   if (!r.ok) throw new Error('Không tìm thấy job')
   return r.json()
+}
+
+export function streamJob(
+  id: string,
+  onData: (job: JobDetail) => void,
+): () => void {
+  const es = new EventSource(apiUrl(`/api/jobs/${encodeURIComponent(id)}/stream`))
+  es.onmessage = (e) => {
+    try {
+      const job = JSON.parse(e.data) as JobDetail
+      if ('error' in (job as any)) {
+        es.close()
+        return
+      }
+      onData(job)
+      if (job.terminal) {
+        es.close()
+      }
+    } catch {}
+  }
+  es.onerror = () => {
+    es.close()
+  }
+  return () => es.close()
 }
 
 export async function createJob(body: {

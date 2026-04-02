@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Button,
@@ -24,11 +24,12 @@ import {
 } from '@ant-design/icons'
 import {
   fetchJobs,
+  streamJobs,
   createJob,
   cancelJob,
   type JobSummary,
 } from '../api'
-import { isJobStillActive, trangThaiJob } from '../statusLabels'
+import { trangThaiJob } from '../statusLabels'
 import { parseUrlsDedupe } from '../parseUrls'
 
 const { Title, Paragraph } = Typography
@@ -50,7 +51,7 @@ export default function HomePage() {
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
-  const load = useCallback(async () => {
+  const load = async () => {
     setLoading(true)
     try {
       setJobs(await fetchJobs())
@@ -59,23 +60,16 @@ export default function HomePage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }
 
   useEffect(() => {
     load()
-  }, [load])
-
-  const hasActiveJob = useMemo(
-    () => jobs.some((j) => isJobStillActive(j.status)),
-    [jobs],
-  )
-
-  /** Có job đang chạy → 5s; không → 60s (tránh gọi /api/jobs liên tục khi không cần). */
-  useEffect(() => {
-    const ms = hasActiveJob ? 5000 : 60_000
-    const t = setInterval(load, ms)
-    return () => clearInterval(t)
-  }, [hasActiveJob, load])
+    const cleanup = streamJobs((jobs) => {
+      setJobs(jobs)
+      setLoading(false)
+    })
+    return cleanup
+  }, [])
 
   const submitJob = async (
     urlsClean: string,

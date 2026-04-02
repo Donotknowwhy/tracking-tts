@@ -16,10 +16,11 @@ from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+import json
 import config
 from src.database import Database
 from run_automated import run_snapshot, run_analysis
@@ -342,6 +343,23 @@ def api_jobs_list() -> Dict[str, Any]:
     return {"jobs": [_job_summary(j) for j in recent]}
 
 
+@app.get("/api/jobs/stream")
+async def api_jobs_stream():
+    """SSE: danh sách 50 job gần nhất, push mỗi khi có thay đổi."""
+    async def event_generator():
+        last_snapshot = None
+        while True:
+            with jobs_lock:
+                recent = list(jobs.values())[-50:][::-1]
+            summaries = [_job_summary(j) for j in recent]
+            snapshot = json.dumps(summaries, ensure_ascii=False)
+            if snapshot != last_snapshot:
+                yield f"data: {snapshot}\n\n"
+                last_snapshot = snapshot
+            await asyncio.sleep(1)
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
 @app.post("/api/jobs")
 def api_create_job(body: CreateJobBody) -> Dict[str, str]:
     parsed = _parse_urls_dedupe(body.urls)
@@ -351,6 +369,43 @@ def api_create_job(body: CreateJobBody) -> Dict[str, str]:
     seo_clean = (body.seo_keywords or "").strip()[:8000]
     job_id = _enqueue_job(parsed, body.interval_hours, name_clean, seo_clean)
     return {"job_id": job_id}
+
+
+@app.get("/api/jobs/{job_id}/stream")
+async def api_job_stream(job_id: str):
+    """SSE: push chi tiết một job, dừng khi terminal."""
+    async def event_generator():
+        while True:
+            with jobs_lock:
+                job = jobs.get(job_id)
+                if not job:
+                    yield f"data: {json.dumps({'error': 'Job not found'}, ensure_ascii=False)}\n\n"
+                    break
+                _sync_outputs_into_job(job)
+                outputs = list(job.get("outputs", []))
+
+            payload = {
+                "status": job.get("status"),
+                "message": job.get("message"),
+                "job_name": job.get("job_name"),
+                "session_id": job.get("session_id"),
+                "total_urls": job.get("total_urls"),
+                "processed_urls": job.get("processed_urls"),
+                "progress": _progress_payload(job),
+                "remain_text": _remain_text(job),
+                "created_at": _format_dt(job.get("created_at")),
+                "completed_at": _format_dt(job.get("completed_at")),
+                "outputs": outputs,
+                "can_cancel": _can_cancel(job),
+                "cancel_requested": bool(job.get("cancel_requested")),
+                "terminal": job.get("status") in ("completed", "failed", "cancelled"),
+            }
+            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+            if payload["terminal"]:
+                break
+            await asyncio.sleep(1)
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @app.get("/api/jobs/{job_id}")

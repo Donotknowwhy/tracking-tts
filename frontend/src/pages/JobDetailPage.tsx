@@ -14,7 +14,7 @@ import {
   message,
 } from 'antd'
 import { ArrowLeftOutlined, ExclamationCircleOutlined, StopOutlined } from '@ant-design/icons'
-import { fetchJob, cancelJob, fileUrl, type JobDetail } from '../api'
+import { fetchJob, streamJob, cancelJob, fileUrl, type JobDetail } from '../api'
 import { trangThaiJob } from '../statusLabels'
 
 const { Title } = Typography
@@ -53,10 +53,13 @@ export default function JobDetailPage() {
   }, [load])
 
   useEffect(() => {
-    if (!jobId || !job || job.terminal) return
-    const t = setInterval(load, 5000)
-    return () => clearInterval(t)
-  }, [jobId, job?.terminal, load])
+    if (!jobId) return
+    const cleanup = streamJob(jobId, (data) => {
+      setJob(data)
+      setLoading(false)
+    })
+    return cleanup
+  }, [jobId])
 
   const doCancel = async () => {
     if (!jobId) return
