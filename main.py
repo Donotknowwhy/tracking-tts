@@ -129,11 +129,13 @@ def run_analysis(session_id: int):
 
     sess = db.get_session(session_id)
     seo_raw = (sess or {}).get("seo_keywords") or ""
+    win_raw = (sess or {}).get("win_keywords") or ""
 
     # Extract keywords
     keywords_results = extract_keywords(
         analysis_results,
         seo_keywords_raw=seo_raw,
+        win_keywords_raw=win_raw,
     )
     
     if keywords_results:

@@ -82,9 +82,11 @@ class TrackingScheduler:
 
         sess = self.db.get_session(session_id)
         seo_raw = (sess or {}).get("seo_keywords") or ""
+        win_raw = (sess or {}).get("win_keywords") or ""
         keywords_results = extract_keywords(
             analysis_results,
             seo_keywords_raw=seo_raw,
+            win_keywords_raw=win_raw,
         )
         self.db.save_keywords(session_id, keywords_results)
         

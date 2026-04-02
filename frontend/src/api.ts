@@ -110,6 +110,7 @@ export async function createJob(body: {
   interval_hours: number
   job_name: string
   seo_keywords?: string
+  win_keywords?: string
 }): Promise<{ job_id: string }> {
   const r = await fetch(apiUrl('/api/jobs'), {
     method: 'POST',
@@ -117,6 +118,7 @@ export async function createJob(body: {
     body: JSON.stringify({
       ...body,
       seo_keywords: body.seo_keywords ?? '',
+      win_keywords: body.win_keywords ?? '',
     }),
   })
   if (!r.ok) {

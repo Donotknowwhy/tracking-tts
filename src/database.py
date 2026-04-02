@@ -26,7 +26,8 @@ class Database:
                 check_interval_hours REAL,
                 total_products INTEGER,
                 status TEXT DEFAULT 'in_progress',
-                seo_keywords TEXT
+                seo_keywords TEXT,
+                win_keywords TEXT
             )
         """)
         
@@ -67,6 +68,7 @@ class Database:
 
         self._migrate_drop_rank_by_delta(cursor)
         self._migrate_sessions_seo_keywords(cursor)
+        self._migrate_sessions_win_keywords(cursor)
 
         # Keywords table
         cursor.execute("""
@@ -106,6 +108,15 @@ class Database:
             except sqlite3.OperationalError:
                 pass
 
+    def _migrate_sessions_win_keywords(self, cursor):
+        cursor.execute("PRAGMA table_info(sessions)")
+        cols = [row[1] for row in cursor.fetchall()]
+        if cols and "win_keywords" not in cols:
+            try:
+                cursor.execute("ALTER TABLE sessions ADD COLUMN win_keywords TEXT")
+            except sqlite3.OperationalError:
+                pass
+
     def _migrate_keywords_bucket(self, cursor):
         cursor.execute("PRAGMA table_info(keywords)")
         cols = [row[1] for row in cursor.fetchall()]
@@ -122,15 +133,16 @@ class Database:
         check_interval_hours: float,
         total_products: int,
         seo_keywords: Optional[str] = None,
+        win_keywords: Optional[str] = None,
     ) -> int:
         """Create a new tracking session"""
         conn = self.get_connection()
         cursor = conn.cursor()
 
         cursor.execute("""
-            INSERT INTO sessions (check_interval_hours, total_products, seo_keywords)
-            VALUES (?, ?, ?)
-        """, (check_interval_hours, total_products, seo_keywords))
+            INSERT INTO sessions (check_interval_hours, total_products, seo_keywords, win_keywords)
+            VALUES (?, ?, ?, ?)
+        """, (check_interval_hours, total_products, seo_keywords, win_keywords))
         
         session_id = cursor.lastrowid
         conn.commit()

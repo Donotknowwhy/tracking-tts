@@ -192,6 +192,7 @@ def _enqueue_job(
     interval_hours: float,
     job_name: Any,
     seo_keywords: str = "",
+    win_keywords: str = "",
 ) -> str:
     job_id = uuid.uuid4().hex
     created = _now_vn()
@@ -208,17 +209,24 @@ def _enqueue_job(
             "remaining_seconds": int(interval_hours * 3600),
             "outputs": [],
             "seo_keywords": seo_keywords,
+            "win_keywords": win_keywords,
         }
     worker = threading.Thread(
         target=_run_job,
-        args=(job_id, urls, interval_hours, seo_keywords),
+        args=(job_id, urls, interval_hours, seo_keywords, win_keywords),
         daemon=True,
     )
     worker.start()
     return job_id
 
 
-def _run_job(job_id: str, urls: List[str], interval_hours: float, seo_keywords: str = "") -> None:
+def _run_job(
+    job_id: str,
+    urls: List[str],
+    interval_hours: float,
+    seo_keywords: str = "",
+    win_keywords: str = "",
+) -> None:
     try:
         def _check_cancel() -> None:
             if _is_cancel_requested(job_id):
@@ -228,6 +236,7 @@ def _run_job(job_id: str, urls: List[str], interval_hours: float, seo_keywords: 
             check_interval_hours=interval_hours,
             total_products=len(urls),
             seo_keywords=seo_keywords.strip()[:8000] or None,
+            win_keywords=win_keywords.strip()[:8000] or None,
         )
         total = len(urls)
 
@@ -334,6 +343,7 @@ class CreateJobBody(BaseModel):
     interval_hours: float = Field(default=3.0, ge=0)
     job_name: str = ""
     seo_keywords: str = ""
+    win_keywords: str = ""
 
 
 @app.get("/api/jobs")
@@ -367,7 +377,8 @@ def api_create_job(body: CreateJobBody) -> Dict[str, str]:
         raise HTTPException(status_code=400, detail="Danh sách URL đang trống.")
     name_clean = body.job_name.strip()[:120] or None
     seo_clean = (body.seo_keywords or "").strip()[:8000]
-    job_id = _enqueue_job(parsed, body.interval_hours, name_clean, seo_clean)
+    win_clean = (body.win_keywords or "").strip()[:8000]
+    job_id = _enqueue_job(parsed, body.interval_hours, name_clean, seo_clean, win_clean)
     return {"job_id": job_id}
 
 

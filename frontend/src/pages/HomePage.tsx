@@ -77,6 +77,7 @@ export default function HomePage() {
       job_name?: string
       interval_hours: number
       seo_keywords?: string
+      win_keywords?: string
     },
   ) => {
     setSubmitting(true)
@@ -86,6 +87,7 @@ export default function HomePage() {
         interval_hours: values.interval_hours ?? 3,
         job_name: values.job_name?.trim() ?? '',
         seo_keywords: values.seo_keywords ?? '',
+        win_keywords: values.win_keywords ?? '',
       })
       message.success('Đã tạo job')
       navigate(`/jobs/${job_id}`)
@@ -101,6 +103,7 @@ export default function HomePage() {
     urls: string
     interval_hours: number
     seo_keywords?: string
+    win_keywords?: string
   }) => {
     const {
       urls: urlsClean,
@@ -252,6 +255,16 @@ export default function HomePage() {
             <Input.TextArea
               rows={4}
               placeholder={'wash\nvintage\nstreetwear'}
+            />
+          </Form.Item>
+          <Form.Item
+            label="Từ khóa cần kiểm tra mức độ win (tùy chọn)"
+            name="win_keywords"
+            extra="Mỗi dòng hoặc phân tách bằng dấu phẩy/chấm phẩy. Ví dụ: wash, vintage."
+          >
+            <Input.TextArea
+              rows={3}
+              placeholder={'K1\nK2'}
             />
           </Form.Item>
           <Form.Item label="Khoảng cách giữa 2 snapshot (giờ)" name="interval_hours">

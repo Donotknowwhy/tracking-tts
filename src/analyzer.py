@@ -1,4 +1,5 @@
 from typing import List, Dict, Any, Optional, Set
+from datetime import datetime, timezone
 import re
 from collections import Counter
 import config
@@ -29,6 +30,48 @@ def classify_keyword_bucket(keyword: str, seo_set: Set[str]) -> str:
         if tok in seo_set:
             return "seo"
     return "niche"
+
+
+def parse_win_keywords(raw: Optional[str]) -> List[str]:
+    """
+    Parse danh sách keyword user muốn kiểm tra mức độ win.
+    Chuẩn hóa theo clean_title để đảm bảo so khớp với title đã clean.
+    """
+    if not raw or not str(raw).strip():
+        return []
+    parts = re.split(r"[\n,;]+", str(raw))
+    seen: set[str] = set()
+    out: List[str] = []
+    for p in parts:
+        item = p.strip()
+        if not item:
+            continue
+        norm = clean_title(item)
+        if not norm:
+            continue
+        if norm in seen:
+            continue
+        seen.add(norm)
+        out.append(norm)
+    return out
+
+
+def _parse_db_timestamp(value: Any) -> Optional[datetime]:
+    """
+    Parse timestamp SQLite (thường là string). Nếu không có tzinfo thì coi như UTC.
+    """
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(s.replace(" ", "T", 1))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 def compute_growth(snapshots_t1: List[Dict[str, Any]], 
                    snapshots_t2: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -105,6 +148,7 @@ def extract_keywords(
     analysis_results: List[Dict[str, Any]],
     top_n: int = None,
     seo_keywords_raw: Optional[str] = None,
+    win_keywords_raw: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Extract keywords from top-performing products.
@@ -121,6 +165,59 @@ def extract_keywords(
         top_n = config.TRACKING_CONFIG['top_n_keywords']
 
     seo_set = parse_seo_blocklist(seo_keywords_raw)
+    win_keywords = parse_win_keywords(win_keywords_raw)
+    win_keywords_set = set(win_keywords)
+
+    # Precompute evaluation products for "win" criteria.
+    # - time_ok: t2 - t1 > 6h (chỉ cần như ý kiến của bạn)
+    # - delta filters: delta > 20, delta > 5
+    eval_products: List[Dict[str, Any]] = []
+    for r in analysis_results:
+        title = r.get("product_title") or ""
+        title_clean = clean_title(title)
+        if not title_clean:
+            continue
+
+        delta = r.get("delta")
+        if delta is None:
+            continue
+
+        t1 = _parse_db_timestamp(r.get("scanned_at_t1"))
+        t2 = _parse_db_timestamp(r.get("scanned_at_t2"))
+        time_ok = False
+        if t1 and t2:
+            time_ok = (t2 - t1).total_seconds() / 3600.0 > 6.0
+
+        eval_products.append(
+            {
+                "title": title_clean,
+                "delta": delta,
+                "time_ok": time_ok,
+            }
+        )
+
+    # Decide win flags for each user-provided keyword.
+    # - condition1: appears in >= 2 products with delta > 20
+    # - condition2: appears in >= 10 products with delta > 5 AND total occurrences >= 10
+    win_map: Dict[str, bool] = {}
+    for kw in win_keywords:
+        cond1_products = 0
+        cond2_products = 0
+        cond2_occurrences = 0
+        for p in eval_products:
+            if not p["time_ok"]:
+                continue
+            if kw not in p["title"]:
+                continue
+            if p["delta"] > 20:
+                cond1_products += 1
+            if p["delta"] > 5:
+                cond2_products += 1
+                cond2_occurrences += p["title"].count(kw)
+
+        win_map[kw] = (cond1_products >= 2) or (
+            cond2_products >= 10 and cond2_occurrences >= 10
+        )
     
     # Filter: only products with meaningful delta
     filtered = [
@@ -209,14 +306,71 @@ def extract_keywords(
         item['rank'] = rank
 
     top = all_keywords[:10]
+
+    # Attach SEO bucket + win flag to extracted keywords.
     for item in top:
         kw = item["keyword"]
         bucket = classify_keyword_bucket(kw, seo_set)
         item["keyword_bucket"] = bucket
         item["keyword_seo"] = kw if bucket == "seo" else ""
         item["keyword_niche"] = kw if bucket == "niche" else ""
+        item["keyword_win_check"] = (
+            win_map.get(kw) if kw in win_keywords_set else ""
+        )
 
-    return top
+    # Ensure user win-keywords are present in output rows.
+    existing_keywords = {it["keyword"] for it in top}
+    extra_items: List[Dict[str, Any]] = []
+    for kw in win_keywords:
+        if kw in existing_keywords:
+            continue
+
+        freq = 0
+        any_found = False
+        for product in top_products:
+            cleaned_title = clean_title(product.get("product_title") or "")
+            if kw not in cleaned_title:
+                continue
+            any_found = True
+            freq += cleaned_title.count(kw)
+
+        # Infer keyword_type by token count (consistent with sheet).
+        tok_count = len(kw.split())
+        if tok_count == 1:
+            keyword_type = "unigram"
+        elif tok_count == 2:
+            keyword_type = "bigram"
+        elif tok_count == 3:
+            keyword_type = "trigram"
+        else:
+            keyword_type = "phrase"
+
+        bucket = classify_keyword_bucket(kw, seo_set)
+        extra_items.append(
+            {
+                "keyword": kw,
+                "keyword_type": keyword_type,
+                "frequency": freq,
+                "rank": 0,
+                "keyword_bucket": bucket,
+                "keyword_seo": kw if bucket == "seo" else "",
+                "keyword_niche": kw if bucket == "niche" else "",
+                "keyword_win_check": win_map.get(kw, False),
+                # If user keyword never appears in the extracted pool, keep it but let freq drive rank.
+                "_any_found": any_found,
+            }
+        )
+
+    out_items = top + extra_items
+    out_items = sorted(out_items, key=lambda x: x.get("frequency", 0), reverse=True)
+    for rank, item in enumerate(out_items, start=1):
+        item["rank"] = rank
+
+    # Drop internal helper key.
+    for item in out_items:
+        item.pop("_any_found", None)
+
+    return out_items
 
 def filter_results(analysis_results: List[Dict[str, Any]],
                    min_delta: int = None) -> List[Dict[str, Any]]:

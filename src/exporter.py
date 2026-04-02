@@ -108,6 +108,7 @@ def export_to_csv(analysis_results: List[Dict[str, Any]],
                 'keyword_niche',
                 'keyword_type',
                 'frequency',
+                'keyword_win_check',
             ]
 
             writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -120,6 +121,7 @@ def export_to_csv(analysis_results: List[Dict[str, Any]],
                     'keyword_niche': row.get('keyword_niche', ''),
                     'keyword_type': row['keyword_type'],
                     'frequency': row['frequency'],
+                    'keyword_win_check': row.get('keyword_win_check', ''),
                 })
     
     return str(products_csv), str(keywords_csv)
@@ -178,6 +180,7 @@ def export_to_excel(analysis_results: List[Dict[str, Any]],
         "Keyword niche",
         "Loại",
         "Tần suất",
+        "Keyword cần kiểm tra mức độ win",
     ]
     ws_keywords.append(keyword_headers)
 
@@ -188,6 +191,7 @@ def export_to_excel(analysis_results: List[Dict[str, Any]],
             kw.get("keyword_niche", ""),
             kw["keyword_type"],
             kw["frequency"],
+            kw.get("keyword_win_check", ""),
         ])
 
     for ws in [ws_products, ws_keywords]:
