@@ -1,3 +1,13 @@
+/** Base URL của FastAPI (Oracle / máy chủ API). Để trống khi dev: Vite proxy /api → localhost:8000. */
+const API_BASE = (
+  import.meta.env.VITE_API_BASE_URL as string | undefined
+)?.replace(/\/$/, '') ?? ''
+
+function apiUrl(path: string): string {
+  const p = path.startsWith('/') ? path : `/${path}`
+  return `${API_BASE}${p}`
+}
+
 export type JobSummary = {
   job_id: string
   job_short: string
@@ -32,14 +42,14 @@ export type JobDetail = {
 }
 
 export async function fetchJobs(): Promise<JobSummary[]> {
-  const r = await fetch('/api/jobs')
+  const r = await fetch(apiUrl('/api/jobs'))
   if (!r.ok) throw new Error('Không tải được danh sách job')
   const d = await r.json()
   return d.jobs ?? []
 }
 
 export async function fetchJob(id: string): Promise<JobDetail> {
-  const r = await fetch(`/api/jobs/${encodeURIComponent(id)}`)
+  const r = await fetch(apiUrl(`/api/jobs/${encodeURIComponent(id)}`))
   if (!r.ok) throw new Error('Không tìm thấy job')
   return r.json()
 }
@@ -50,7 +60,7 @@ export async function createJob(body: {
   job_name: string
   seo_keywords?: string
 }): Promise<{ job_id: string }> {
-  const r = await fetch('/api/jobs', {
+  const r = await fetch(apiUrl('/api/jobs'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -72,12 +82,12 @@ export async function createJob(body: {
 }
 
 export async function cancelJob(id: string): Promise<void> {
-  const r = await fetch(`/api/jobs/${encodeURIComponent(id)}/cancel`, {
+  const r = await fetch(apiUrl(`/api/jobs/${encodeURIComponent(id)}/cancel`), {
     method: 'POST',
   })
   if (!r.ok) throw new Error('Hủy job thất bại')
 }
 
 export function fileUrl(name: string) {
-  return `/files/${encodeURIComponent(name)}`
+  return apiUrl(`/files/${encodeURIComponent(name)}`)
 }

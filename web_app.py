@@ -5,6 +5,7 @@ Minimal web UI for TikTok tracking jobs.
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
 import time
 import uuid
@@ -25,12 +26,20 @@ from run_automated import run_snapshot, run_analysis
 
 
 app = FastAPI(title="TikTok Tracking UI")
+
+_cors_origins = [
+    "http://127.0.0.1:5173",
+    "http://localhost:5173",
+]
+_extra = os.environ.get("CORS_ORIGINS", "").strip()
+if _extra:
+    _cors_origins.extend(o.strip() for o in _extra.split(",") if o.strip())
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://127.0.0.1:5173",
-        "http://localhost:5173",
-    ],
+    allow_origins=_cors_origins,
+    # Preview + production trên Vercel (*.vercel.app) không cần liệt kê từng URL
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
