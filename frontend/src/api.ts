@@ -1,7 +1,20 @@
-/** Base URL FastAPI. Để trống: dev dùng Vite proxy; production Vercel dùng vercel.json proxy /api → backend (tránh mixed content). */
-const API_BASE = (
-  import.meta.env.VITE_API_BASE_URL as string | undefined
-)?.replace(/\/$/, '') ?? ''
+/** Base URL FastAPI. Để trống: dev Vite proxy; production Vercel vercel.json proxy /api → backend. */
+function resolveApiBase(): string {
+  const raw = (
+    import.meta.env.VITE_API_BASE_URL as string | undefined
+  )?.replace(/\/$/, '') ?? ''
+  // Trang HTTPS không được fetch HTTP — bỏ qua env http:// (ví dụ còn sót trên Vercel), dùng /api cùng origin.
+  if (
+    typeof window !== 'undefined' &&
+    window.location.protocol === 'https:' &&
+    raw.startsWith('http:')
+  ) {
+    return ''
+  }
+  return raw
+}
+
+const API_BASE = resolveApiBase()
 
 function apiUrl(path: string): string {
   const p = path.startsWith('/') ? path : `/${path}`
