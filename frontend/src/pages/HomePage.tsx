@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Button,
@@ -28,7 +28,7 @@ import {
   cancelJob,
   type JobSummary,
 } from '../api'
-import { trangThaiJob } from '../statusLabels'
+import { isJobStillActive, trangThaiJob } from '../statusLabels'
 import { parseUrlsDedupe } from '../parseUrls'
 
 const { Title, Paragraph } = Typography
@@ -50,7 +50,7 @@ export default function HomePage() {
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true)
     try {
       setJobs(await fetchJobs())
@@ -59,13 +59,23 @@ export default function HomePage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
     load()
-    const t = setInterval(load, 5000)
+  }, [load])
+
+  const hasActiveJob = useMemo(
+    () => jobs.some((j) => isJobStillActive(j.status)),
+    [jobs],
+  )
+
+  /** Có job đang chạy → 5s; không → 60s (tránh gọi /api/jobs liên tục khi không cần). */
+  useEffect(() => {
+    const ms = hasActiveJob ? 5000 : 60_000
+    const t = setInterval(load, ms)
     return () => clearInterval(t)
-  }, [])
+  }, [hasActiveJob, load])
 
   const submitJob = async (
     urlsClean: string,
