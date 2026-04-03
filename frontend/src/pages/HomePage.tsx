@@ -54,6 +54,7 @@ function ProgressCell({ row }: { row: JobSummary }) {
         percent={p.percent}
         size="small"
         status="active"
+        style={{ width: '100%' }}
         format={() => `${p.processed} / ${p.total}`}
       />
     )
@@ -228,7 +229,6 @@ export default function HomePage() {
       title: 'Mã job',
       dataIndex: 'job_short',
       width: 100,
-      fixed: 'left',
       render: (_, row) => (
         <Link to={`/jobs/${row.job_id}`}>{row.job_short}</Link>
       ),
@@ -243,16 +243,22 @@ export default function HomePage() {
     {
       title: 'Trạng thái',
       dataIndex: 'status',
-      width: 140,
+      width: 160,
       render: (s: string) => (
-        <Tag color={statusColor(s)}>{trangThaiJob(s)}</Tag>
+        <Tag color={statusColor(s)} style={{ margin: 0, whiteSpace: 'normal' }}>
+          {trangThaiJob(s)}
+        </Tag>
       ),
     },
     {
       title: 'Tiến độ',
       key: 'progress_col',
       width: 200,
-      render: (_, row) => <ProgressCell row={row} />,
+      render: (_, row) => (
+        <div style={{ minWidth: 160 }}>
+          <ProgressCell row={row} />
+        </div>
+      ),
     },
     { title: 'Tạo lúc', dataIndex: 'created_at', width: 160 },
     {
@@ -356,8 +362,7 @@ export default function HomePage() {
             dataSource={jobs}
             pagination={false}
             size="middle"
-            scroll={{ x: 820 }}
-            tableLayout="fixed"
+            scroll={{ x: 860 }}
           />
         </div>
       </Card>
