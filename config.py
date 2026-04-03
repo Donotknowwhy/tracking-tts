@@ -96,6 +96,7 @@ SCRAPING_CONFIG = {
     "timeout": 30000,        # Page load timeout (milliseconds)
     "headless": True,        # True: chạy ngầm; False: bật cửa sổ (debug/CAPTCHA)
     "user_data_dir": str(BASE_DIR / "browser_data"),  # Persistent browser profile
+    "concurrency": 3,        # Max concurrent URL fetches per job (3-5 recommended)
 }
 
 # Tracking configuration

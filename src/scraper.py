@@ -18,16 +18,16 @@ class TikTokScraper:
     TikTok Shop scraper using Playwright with stealth mode
     
     NOTE: Due to TikTok's CAPTCHA protection, this scraper:
-    1. Runs browser in non-headless mode (visible browser)
+    1. Runs browser in headless or visible mode (configurable)
     2. Uses stealth techniques to avoid detection
     3. May require manual CAPTCHA solving on first run
+    4. Supports concurrent fetching (configurable concurrency per job)
     """
     
     def __init__(self):
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
         self.playwright = None
-        self.page: Optional[Page] = None  # Reuse single page
     
     async def __aenter__(self):
         """Async context manager entry"""
@@ -122,9 +122,6 @@ class TikTokScraper:
                     logger.warning("Empty or invalid cookies file")
             except Exception as e:
                 logger.error(f"Failed to load cookies: {e}")
-        
-        # Create single reusable page
-        self.page = await self.context.new_page()
     
     async def close(self):
         """Close browser and playwright"""
@@ -133,11 +130,12 @@ class TikTokScraper:
         if self.playwright:
             await self.playwright.stop()
     
-    async def fetch_product(self, url: str, max_retries: int = None) -> Dict[str, Any]:
+    async def fetch_product(self, page: Page, url: str, max_retries: int = None) -> Dict[str, Any]:
         """
         Fetch a single product page and extract data
         
         Args:
+            page: Playwright Page instance (one per concurrent fetch)
             url: Product URL
             max_retries: Maximum retry attempts (defaults to config)
         
@@ -151,11 +149,10 @@ class TikTokScraper:
         
         for attempt in range(max_retries):
             try:
-                # Reuse existing page instead of creating new one
                 logger.info(f"Fetching (attempt {attempt + 1}/{max_retries}): {url}")
                 
                 # Navigate to page
-                response = await self.page.goto(url, wait_until='domcontentloaded', timeout=60000)
+                response = await page.goto(url, wait_until='domcontentloaded', timeout=60000)
                 
                 if not response or response.status != 200:
                     logger.warning(f"Non-200 status for {url}")
@@ -164,7 +161,7 @@ class TikTokScraper:
                         continue
                 
                 # Check for CAPTCHA
-                title = await self.page.title()
+                title = await page.title()
                 if 'security' in title.lower() or 'captcha' in title.lower():
                     logger.warning(f"CAPTCHA detected! Page title: {title}")
                     logger.warning("Please solve CAPTCHA manually in the browser window...")
@@ -172,7 +169,7 @@ class TikTokScraper:
                     # Wait for user to solve CAPTCHA (check for title change)
                     for wait_attempt in range(60):  # Wait up to 60 seconds
                         await asyncio.sleep(1)
-                        new_title = await self.page.title()
+                        new_title = await page.title()
                         if 'security' not in new_title.lower() and 'captcha' not in new_title.lower():
                             logger.info("CAPTCHA appears to be solved! Continuing...")
                             break
@@ -184,7 +181,7 @@ class TikTokScraper:
                 await asyncio.sleep(3)
                 
                 # Get page content
-                html_content = await self.page.content()
+                html_content = await page.content()
                 
                 # Parse content
                 parsed_data = parse_product_page(html_content)
@@ -249,7 +246,7 @@ class TikTokScraper:
         on_progress: Optional[Callable[[int, int], Any]] = None,
     ) -> list:
         """
-        Fetch multiple products sequentially
+        Fetch multiple products with controlled concurrency (semaphore-based).
 
         Args:
             urls: List of product URLs
@@ -259,22 +256,36 @@ class TikTokScraper:
         Returns:
             List of product data dicts
         """
-        results = []
         total = len(urls)
         if on_progress:
             on_progress(0, total)
+        
+        concurrency = config.SCRAPING_CONFIG.get('concurrency', 3)
+        semaphore = asyncio.Semaphore(concurrency)
+        results = [None] * total
+        completed = 0
+        completed_lock = asyncio.Lock()
 
-        for idx, url in enumerate(urls, 1):
-            logger.info(f"Progress: {idx}/{total}")
+        async def fetch_with_limit(idx: int, url: str) -> None:
+            nonlocal completed
+            async with semaphore:
+                # Create a new page for this fetch
+                page = await self.context.new_page()
+                try:
+                    result = await self.fetch_product(page, url)
+                    results[idx] = result
+                finally:
+                    await page.close()
+                
+                async with completed_lock:
+                    completed += 1
+                    if on_progress:
+                        on_progress(completed, total)
+                    if completed % 10 == 0 or completed == total:
+                        success_count = sum(1 for r in results if r and r.get('status') == 'success')
+                        logger.info(f"Processed {completed}/{total} - Success: {success_count}")
 
-            result = await self.fetch_product(url)
-            results.append(result)
-            if on_progress:
-                on_progress(idx, total)
-
-            # Progress indicator
-            if idx % 10 == 0:
-                success_count = sum(1 for r in results if r['status'] == 'success')
-                logger.info(f"Processed {idx}/{total} - Success: {success_count}")
-
+        tasks = [fetch_with_limit(i, url) for i, url in enumerate(urls)]
+        await asyncio.gather(*tasks)
+        
         return results

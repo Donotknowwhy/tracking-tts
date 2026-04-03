@@ -185,6 +185,11 @@ def _job_summary(j: Dict[str, Any]) -> Dict[str, Any]:
         "status": j.get("status"),
         "created_at": _format_dt(j.get("created_at")),
         "can_cancel": _can_cancel(j),
+        "message": j.get("message"),
+        "total_urls": j.get("total_urls"),
+        "processed_urls": j.get("processed_urls"),
+        "remain_text": _remain_text(j),
+        "progress": _progress_payload(j),
     }
 
 

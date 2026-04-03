@@ -8,6 +8,7 @@ import {
   InputNumber,
   List,
   Modal,
+  Progress,
   Space,
   Table,
   Tag,
@@ -33,6 +34,54 @@ import { trangThaiJob } from '../statusLabels'
 import { parseUrlsDedupe } from '../parseUrls'
 
 const { Title, Paragraph } = Typography
+
+function ProgressCell({ row }: { row: JobSummary }) {
+  const p = row.progress
+  const total = row.total_urls ?? 0
+  if (!p || p.mode === 'none') {
+    if (total > 0) {
+      return (
+        <Typography.Text type="secondary">
+          {row.processed_urls ?? 0} / {total} URL
+        </Typography.Text>
+      )
+    }
+    return '—'
+  }
+  if (p.mode === 'urls' && total > 0) {
+    return (
+      <Progress
+        percent={p.percent}
+        size="small"
+        status="active"
+        format={() => `${p.processed} / ${p.total}`}
+      />
+    )
+  }
+  if (p.mode === 'waiting') {
+    return (
+      <span>
+        Chờ snapshot 2
+        {row.remain_text && row.remain_text !== '-' ? (
+          <Typography.Text type="secondary" style={{ marginLeft: 6 }}>
+            ({row.remain_text})
+          </Typography.Text>
+        ) : null}
+      </span>
+    )
+  }
+  if (p.mode === 'analyzing') {
+    return <Typography.Text type="secondary">Phân tích…</Typography.Text>
+  }
+  if (total > 0) {
+    return (
+      <Typography.Text type="secondary">
+        {row.processed_urls ?? 0} / {total} URL
+      </Typography.Text>
+    )
+  }
+  return '—'
+}
 
 function statusColor(status: string): string {
   if (status === 'completed') return 'success'
@@ -178,23 +227,38 @@ export default function HomePage() {
     {
       title: 'Mã job',
       dataIndex: 'job_short',
+      width: 100,
+      fixed: 'left',
       render: (_, row) => (
         <Link to={`/jobs/${row.job_id}`}>{row.job_short}</Link>
       ),
     },
-    { title: 'Tên job', dataIndex: 'job_name', render: (v) => v ?? '—' },
-    { title: 'Phiên', dataIndex: 'session_id', render: (v) => v ?? '—' },
+    {
+      title: 'Tên job',
+      dataIndex: 'job_name',
+      width: 140,
+      ellipsis: true,
+      render: (v) => v ?? '—',
+    },
     {
       title: 'Trạng thái',
       dataIndex: 'status',
+      width: 140,
       render: (s: string) => (
         <Tag color={statusColor(s)}>{trangThaiJob(s)}</Tag>
       ),
     },
-    { title: 'Tạo lúc', dataIndex: 'created_at' },
+    {
+      title: 'Tiến độ',
+      key: 'progress_col',
+      width: 200,
+      render: (_, row) => <ProgressCell row={row} />,
+    },
+    { title: 'Tạo lúc', dataIndex: 'created_at', width: 160 },
     {
       title: 'Thao tác',
       key: 'act',
+      width: 96,
       render: (_, row) =>
         row.can_cancel ? (
           <Button
@@ -284,14 +348,18 @@ export default function HomePage() {
       </Card>
 
       <Card title="Job gần đây">
-        <Table<JobSummary>
-          rowKey="job_id"
-          loading={loading}
-          columns={columns}
-          dataSource={jobs}
-          pagination={false}
-          size="middle"
-        />
+        <div style={{ width: '100%', overflowX: 'auto' }}>
+          <Table<JobSummary>
+            rowKey="job_id"
+            loading={loading}
+            columns={columns}
+            dataSource={jobs}
+            pagination={false}
+            size="middle"
+            scroll={{ x: 820 }}
+            tableLayout="fixed"
+          />
+        </div>
       </Card>
     </Space>
   )

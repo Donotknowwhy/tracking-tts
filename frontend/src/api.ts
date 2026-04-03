@@ -29,6 +29,11 @@ export type JobSummary = {
   status: string
   created_at: string
   can_cancel: boolean
+  message: string | null
+  total_urls: number | null
+  processed_urls: number | null
+  remain_text?: string
+  progress?: Progress
 }
 
 export type Progress =
