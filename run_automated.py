@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import config
 from src.database import Database
+from src.proxy_check import is_http_proxy_configured, verify_http_proxy
 from src.scraper import TikTokScraper
 from src.analyzer import compute_growth, extract_keywords
 from src.exporter import export_to_csv, export_to_excel, export_snapshot_to_excel, print_summary
@@ -171,6 +172,15 @@ async def run_automated_tracking(urls_file: str, interval_hours: float = None):
     )
     
     logger.info(f"Created session ID: {session_id}")
+
+    if is_http_proxy_configured():
+        logger.info("Verifying HTTP proxy…")
+        ok, proxy_err = verify_http_proxy()
+        if not ok:
+            logger.error("Proxy check failed: %s", proxy_err)
+            db.update_session_status(session_id, "failed")
+            print("\n❌ Proxy không hoạt động:", proxy_err)
+            return
     
     print("\n" + "="*80)
     print("🚀 STARTING AUTOMATED TRACKING")
@@ -186,7 +196,13 @@ async def run_automated_tracking(urls_file: str, interval_hours: float = None):
     logger.info("=" * 50)
     
     success1, errors1, snapshot1_excel = await run_snapshot(urls, session_id, snapshot_order=1)
-    
+
+    if len(urls) > 0 and success1 == 0:
+        logger.error("Snapshot 1: no successful fetches; aborting (session %s).", session_id)
+        db.update_session_status(session_id, "failed")
+        print("\n❌ Dừng: không lấy được dữ liệu cho bất kỳ URL nào ở snapshot 1. Kiểm tra proxy, mạng hoặc URL.")
+        return
+
     next_check = datetime.now() + timedelta(hours=interval_hours)
     
     print("\n" + "="*80)
@@ -225,7 +241,13 @@ async def run_automated_tracking(urls_file: str, interval_hours: float = None):
     logger.info("=" * 50)
     
     success2, errors2, snapshot2_excel = await run_snapshot(urls, session_id, snapshot_order=2)
-    
+
+    if len(urls) > 0 and success2 == 0:
+        logger.error("Snapshot 2: no successful fetches; aborting analysis (session %s).", session_id)
+        db.update_session_status(session_id, "failed")
+        print("\n❌ Dừng: không lấy được dữ liệu cho bất kỳ URL nào ở snapshot 2. Kiểm tra proxy, mạng hoặc URL.")
+        return
+
     print("\n" + "="*80)
     print("✅ SNAPSHOT 2 COMPLETED")
     print("="*80)

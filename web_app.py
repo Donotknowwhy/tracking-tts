@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 import json
 import config
 from src.database import Database
+from src.proxy_check import is_http_proxy_configured, verify_http_proxy
 from run_automated import run_snapshot, run_analysis
 
 
@@ -220,6 +221,30 @@ def _enqueue_job(
     return job_id
 
 
+def _fail_job(
+    job_id: str,
+    message: str,
+    session_id: Any = None,
+    **extra: Any,
+) -> None:
+    """Đặt job failed; nếu có session_id thì đồng bộ file output vào job."""
+    outs: List[str] = []
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if job and session_id:
+            _sync_outputs_into_job(job)
+            outs = list(job.get("outputs", []))
+    _set_job(
+        job_id,
+        status="failed",
+        message=message,
+        completed_at=_now_vn(),
+        remaining_seconds=0,
+        outputs=outs,
+        **extra,
+    )
+
+
 def _run_job(
     job_id: str,
     urls: List[str],
@@ -231,6 +256,18 @@ def _run_job(
         def _check_cancel() -> None:
             if _is_cancel_requested(job_id):
                 raise JobCancelled("User requested cancellation")
+
+        _check_cancel()
+        if is_http_proxy_configured():
+            _set_job(job_id, message="Đang kiểm tra proxy…")
+            ok, proxy_err = verify_http_proxy()
+            if not ok:
+                _fail_job(
+                    job_id,
+                    "Proxy không hoạt động. Kiểm tra user/pass, hạn dùng hoặc nhà cung cấp. "
+                    f"Chi tiết: {proxy_err}",
+                )
+                return
 
         session_id = db.create_session(
             check_interval_hours=interval_hours,
@@ -263,6 +300,17 @@ def _run_job(
         success1, errors1, snap1_report = asyncio.run(
             run_snapshot(urls, session_id, snapshot_order=1, on_progress=progress_t1)
         )
+        if total > 0 and success1 == 0:
+            db.update_session_status(session_id, "failed")
+            _fail_job(
+                job_id,
+                f"Lỗi: Không lấy được dữ liệu từ web (0/{total} URL thành công ở snapshot 1). "
+                "Kiểm tra proxy, mạng hoặc URL (vd. net::ERR_HTTP_RESPONSE_CODE_FAILURE).",
+                session_id=session_id,
+                snapshot1={"success": success1, "errors": errors1, "report": snap1_report},
+            )
+            return
+
         _set_job(
             job_id,
             status="waiting_t2",
@@ -299,6 +347,20 @@ def _run_job(
         success2, errors2, snap2_report = asyncio.run(
             run_snapshot(urls, session_id, snapshot_order=2, on_progress=progress_t2)
         )
+        if total > 0 and success2 == 0:
+            db.update_session_status(session_id, "failed")
+            with jobs_lock:
+                snap1_meta = (jobs.get(job_id) or {}).get("snapshot1")
+            _fail_job(
+                job_id,
+                f"Lỗi: Không lấy được dữ liệu từ web (0/{total} URL thành công ở snapshot 2). "
+                "Kiểm tra proxy, mạng hoặc URL.",
+                session_id=session_id,
+                snapshot1=snap1_meta,
+                snapshot2={"success": success2, "errors": errors2, "report": snap2_report},
+            )
+            return
+
         _set_job(
             job_id,
             snapshot2={"success": success2, "errors": errors2, "report": snap2_report},

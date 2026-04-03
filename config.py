@@ -16,10 +16,10 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 # You can override at runtime using:
 #   - environment variable: TTS_PROXY
 #   - CLI flag: --proxy in auto_track.py
-PROXY_SERVER = "5.181.164.86"
-PROXY_PORT = 56789
-PROXY_USERNAME = "mcilhz1g8m"
-PROXY_PASSWORD = "iLhZ1g8m"
+PROXY_SERVER = "191.101.251.108"
+PROXY_PORT = 20826
+PROXY_USERNAME = "KgVOxvHW"
+PROXY_PASSWORD = "8BYAZdC83i37"
 PROXY_TYPE = "http"
 
 
@@ -94,7 +94,7 @@ SCRAPING_CONFIG = {
     "delay_max": 8,          # Maximum delay between requests (seconds)
     "max_retries": 3,        # Max retry attempts per product
     "timeout": 30000,        # Page load timeout (milliseconds)
-    "headless": True,        # Run browser in headless mode (True = không hiển thị, False = hiển thị)
+    "headless": True,        # True: chạy ngầm; False: bật cửa sổ (debug/CAPTCHA)
     "user_data_dir": str(BASE_DIR / "browser_data"),  # Persistent browser profile
 }
 
