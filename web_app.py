@@ -51,6 +51,18 @@ db = Database()
 jobs_lock = threading.Lock()
 jobs: Dict[str, Dict[str, Any]] = {}
 
+# Load jobs from DB on startup
+def _load_jobs_from_db():
+    """Load recent jobs from database into memory on server start"""
+    with jobs_lock:
+        db_jobs = db.get_all_jobs(limit=50)
+        for job in db_jobs:
+            job_id = job["job_id"]
+            # Sync outputs for completed jobs
+            if job.get("session_id"):
+                _sync_outputs_into_job(job)
+            jobs[job_id] = job
+
 VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 
 
@@ -164,6 +176,37 @@ def _set_job(job_id: str, **updates: Any) -> None:
     with jobs_lock:
         if job_id in jobs:
             jobs[job_id].update(updates)
+            # Sync to DB after updating memory
+            db.save_job(job_id, jobs[job_id])
+
+
+# Trạng thái job còn worker thread đang chạy (hoặc sắp chạy). Sau khi process tắt, không còn thread → phải xử lý khi boot.
+_JOB_ACTIVE_STATUSES = frozenset(
+    {"queued", "running_t1", "running_t2", "waiting_t2", "analyzing"}
+)
+
+
+def _reconcile_orphan_jobs_on_startup() -> None:
+    """Đánh dấu failed các job đang 'treo' vì server đã dừng giữa chừng (không còn worker)."""
+    msg = (
+        "Server đã dừng hoặc khởi động lại khi job chưa xong. "
+        'Tiến trình cũ không còn; dùng nút "Chạy lại" nếu job đã lưu danh sách URL.'
+    )
+    with jobs_lock:
+        stale_ids = [
+            jid
+            for jid, j in jobs.items()
+            if (j.get("status") or "") in _JOB_ACTIVE_STATUSES
+        ]
+    done_at = _now_vn()
+    for jid in stale_ids:
+        _set_job(
+            jid,
+            status="failed",
+            message=msg,
+            completed_at=done_at,
+            remaining_seconds=0,
+        )
 
 
 def _is_cancel_requested(job_id: str) -> bool:
@@ -174,6 +217,23 @@ def _is_cancel_requested(job_id: str) -> bool:
 
 def _can_cancel(job: Dict[str, Any]) -> bool:
     return (job.get("status") not in ("completed", "failed", "cancelled")) and (not job.get("cancel_requested"))
+
+
+def _urls_from_stored(job: Dict[str, Any]) -> List[str]:
+    raw = job.get("urls_raw") or ""
+    if not raw.strip():
+        return []
+    return [
+        ln.strip()
+        for ln in raw.replace("\r\n", "\n").splitlines()
+        if ln.strip()
+    ]
+
+
+def _can_restart(job: Dict[str, Any]) -> bool:
+    if job.get("status") not in ("failed", "cancelled"):
+        return False
+    return bool(_urls_from_stored(job))
 
 
 def _job_summary(j: Dict[str, Any]) -> Dict[str, Any]:
@@ -190,7 +250,29 @@ def _job_summary(j: Dict[str, Any]) -> Dict[str, Any]:
         "processed_urls": j.get("processed_urls"),
         "remain_text": _remain_text(j),
         "progress": _progress_payload(j),
+        "can_restart": _can_restart(j),
     }
+
+
+def _job_created_ts(job: Dict[str, Any]) -> float:
+    """Timestamp để sort: job mới nhất có giá trị lớn nhất."""
+    ca = job.get("created_at")
+    if ca is None:
+        return 0.0
+    if isinstance(ca, datetime):
+        dt = ca
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=VN_TZ)
+        return dt.timestamp()
+    return 0.0
+
+
+def _recent_jobs_sorted(limit: int = 50) -> List[Dict[str, Any]]:
+    """50 job gần nhất theo thời điểm tạo (mới → cũ)."""
+    with jobs_lock:
+        vals = list(jobs.values())
+    vals.sort(key=_job_created_ts, reverse=True)
+    return vals[:limit]
 
 
 def _enqueue_job(
@@ -216,7 +298,10 @@ def _enqueue_job(
             "outputs": [],
             "seo_keywords": seo_keywords,
             "win_keywords": win_keywords,
+            "urls_raw": "\n".join(urls),
         }
+        # Save to DB immediately
+        db.save_job(job_id, jobs[job_id])
     worker = threading.Thread(
         target=_run_job,
         args=(job_id, urls, interval_hours, seo_keywords, win_keywords),
@@ -224,6 +309,59 @@ def _enqueue_job(
     )
     worker.start()
     return job_id
+
+
+def _restart_job_in_place(job_id: str) -> None:
+    """Chạy lại với cùng job_id (failed/cancelled, đã lưu urls_raw); không tạo bản ghi mới."""
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if not _can_restart(job):
+            raise HTTPException(
+                status_code=400,
+                detail="Chỉ có thể chạy lại job đã failed hoặc cancelled và còn danh sách URL đã lưu.",
+            )
+        urls_list = _urls_from_stored(job)
+        if not urls_list:
+            raise HTTPException(status_code=400, detail="Không có danh sách URL đã lưu.")
+        interval = float(job.get("interval_hours") or 3)
+        name = job.get("job_name")
+        seo = job.get("seo_keywords") or ""
+        win = job.get("win_keywords") or ""
+        urls_raw = (job.get("urls_raw") or "").strip() or "\n".join(urls_list)
+        created = job.get("created_at")
+
+        jobs[job_id] = {
+            "job_id": job_id,
+            "job_name": name,
+            "status": "queued",
+            "cancel_requested": False,
+            "cancel_requested_at": None,
+            "created_at": created,
+            "message": "Đang xếp hàng…",
+            "interval_hours": interval,
+            "total_urls": len(urls_list),
+            "remaining_seconds": int(interval * 3600),
+            "outputs": [],
+            "seo_keywords": seo,
+            "win_keywords": win,
+            "urls_raw": urls_raw,
+            "session_id": None,
+            "started_at": None,
+            "completed_at": None,
+            "processed_urls": None,
+            "snapshot1": {},
+            "snapshot2": {},
+        }
+        db.save_job(job_id, jobs[job_id])
+
+    worker = threading.Thread(
+        target=_run_job,
+        args=(job_id, urls_list, interval, seo, win),
+        daemon=True,
+    )
+    worker.start()
 
 
 def _fail_job(
@@ -239,15 +377,15 @@ def _fail_job(
         if job and session_id:
             _sync_outputs_into_job(job)
             outs = list(job.get("outputs", []))
-    _set_job(
-        job_id,
-        status="failed",
-        message=message,
-        completed_at=_now_vn(),
-        remaining_seconds=0,
-        outputs=outs,
+    updates = {
+        "status": "failed",
+        "message": message,
+        "completed_at": _now_vn(),
+        "remaining_seconds": 0,
+        "outputs": outs,
         **extra,
-    )
+    }
+    _set_job(job_id, **updates)
 
 
 def _run_job(
@@ -371,7 +509,9 @@ def _run_job(
             snapshot2={"success": success2, "errors": errors2, "report": snap2_report},
             status="analyzing",
             message="Đang phân tích và xuất báo cáo…",
-            processed_urls=None,
+            # Giữ processed_urls = total (đã fetch xong cả 2 snapshot), tránh UI hiển thị 0/total
+            processed_urls=total,
+            total_urls=total,
         )
 
         _check_cancel()
@@ -385,6 +525,8 @@ def _run_job(
             outputs=outputs,
             completed_at=_now_vn(),
             remaining_seconds=0,
+            processed_urls=total,
+            total_urls=total,
         )
     except JobCancelled:
         outputs = []
@@ -415,8 +557,7 @@ class CreateJobBody(BaseModel):
 
 @app.get("/api/jobs")
 def api_jobs_list() -> Dict[str, Any]:
-    with jobs_lock:
-        recent = list(jobs.values())[-50:][::-1]
+    recent = _recent_jobs_sorted(50)
     return {"jobs": [_job_summary(j) for j in recent]}
 
 
@@ -426,8 +567,7 @@ async def api_jobs_stream():
     async def event_generator():
         last_snapshot = None
         while True:
-            with jobs_lock:
-                recent = list(jobs.values())[-50:][::-1]
+            recent = _recent_jobs_sorted(50)
             summaries = [_job_summary(j) for j in recent]
             snapshot = json.dumps(summaries, ensure_ascii=False)
             if snapshot != last_snapshot:
@@ -477,6 +617,7 @@ async def api_job_stream(job_id: str):
                 "can_cancel": _can_cancel(job),
                 "cancel_requested": bool(job.get("cancel_requested")),
                 "terminal": job.get("status") in ("completed", "failed", "cancelled"),
+                "can_restart": _can_restart(job),
             }
             yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
@@ -511,7 +652,15 @@ def api_job_status(job_id: str) -> Dict[str, Any]:
         "can_cancel": _can_cancel(job),
         "cancel_requested": bool(job.get("cancel_requested")),
         "terminal": job.get("status") in ("completed", "failed", "cancelled"),
+        "can_restart": _can_restart(job),
     }
+
+
+@app.post("/api/jobs/{job_id}/restart")
+def api_restart_job(job_id: str) -> Dict[str, str]:
+    """Chạy lại cùng job_id với URL/cấu hình đã lưu (failed / cancelled)."""
+    _restart_job_in_place(job_id)
+    return {"job_id": job_id}
 
 
 @app.post("/api/jobs/{job_id}/cancel")
@@ -526,6 +675,7 @@ def api_cancel_job(job_id: str) -> Dict[str, Any]:
             job["cancel_requested"] = True
             job["cancel_requested_at"] = _now_vn()
             job["message"] = "Đã nhận yêu cầu hủy. Đang dừng job…"
+            db.save_job(job_id, job)
     return {"ok": True}
 
 
@@ -555,6 +705,10 @@ def download_file(filename: str) -> FileResponse:
 
 _BASE_DIR = Path(__file__).resolve().parent
 _FRONTEND_DIST = _BASE_DIR / "frontend" / "dist"
+
+# Load jobs from DB on startup; job đang chạy trong DB nhưng không còn thread → failed
+_load_jobs_from_db()
+_reconcile_orphan_jobs_on_startup()
 
 if _FRONTEND_DIST.is_dir():
     app.mount("/", StaticFiles(directory=str(_FRONTEND_DIST), html=True), name="spa")

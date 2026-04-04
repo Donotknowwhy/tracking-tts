@@ -86,6 +86,36 @@ class Database:
 
         self._migrate_keywords_bucket(cursor)
 
+        # Jobs table (web UI job tracking)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS jobs (
+                job_id TEXT PRIMARY KEY,
+                session_id INTEGER,
+                job_name TEXT,
+                status TEXT DEFAULT 'queued',
+                message TEXT,
+                total_urls INTEGER,
+                processed_urls INTEGER,
+                interval_hours REAL,
+                remaining_seconds INTEGER,
+                seo_keywords TEXT,
+                win_keywords TEXT,
+                created_at TIMESTAMP,
+                started_at TIMESTAMP,
+                completed_at TIMESTAMP,
+                cancel_requested INTEGER DEFAULT 0,
+                cancel_requested_at TIMESTAMP,
+                snapshot1_success INTEGER,
+                snapshot1_errors INTEGER,
+                snapshot1_report TEXT,
+                snapshot2_success INTEGER,
+                snapshot2_errors INTEGER,
+                snapshot2_report TEXT,
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+            )
+        """)
+        self._migrate_jobs_urls(cursor)
+
         conn.commit()
         conn.close()
 
@@ -125,6 +155,15 @@ class Database:
                 cursor.execute(
                     "ALTER TABLE keywords ADD COLUMN keyword_bucket TEXT DEFAULT 'niche'"
                 )
+            except sqlite3.OperationalError:
+                pass
+
+    def _migrate_jobs_urls(self, cursor):
+        cursor.execute("PRAGMA table_info(jobs)")
+        cols = [row[1] for row in cursor.fetchall()]
+        if cols and "urls" not in cols:
+            try:
+                cursor.execute("ALTER TABLE jobs ADD COLUMN urls TEXT")
             except sqlite3.OperationalError:
                 pass
 
@@ -296,3 +335,145 @@ class Database:
         conn.close()
         
         return dict(row) if row else None
+
+    def save_job(self, job_id: str, job_data: Dict[str, Any]):
+        """Save or update job metadata to database"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        # Extract snapshot metadata
+        snap1 = job_data.get("snapshot1") or {}
+        snap2 = job_data.get("snapshot2") or {}
+        
+        urls_text = job_data.get("urls_raw")
+        if urls_text is None:
+            urls_text = job_data.get("urls")
+
+        cursor.execute("""
+            INSERT OR REPLACE INTO jobs (
+                job_id, session_id, job_name, status, message,
+                total_urls, processed_urls, interval_hours, remaining_seconds,
+                seo_keywords, win_keywords, urls,
+                created_at, started_at, completed_at,
+                cancel_requested, cancel_requested_at,
+                snapshot1_success, snapshot1_errors, snapshot1_report,
+                snapshot2_success, snapshot2_errors, snapshot2_report
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            job_id,
+            job_data.get("session_id"),
+            job_data.get("job_name"),
+            job_data.get("status"),
+            job_data.get("message"),
+            job_data.get("total_urls"),
+            job_data.get("processed_urls"),
+            job_data.get("interval_hours"),
+            job_data.get("remaining_seconds"),
+            job_data.get("seo_keywords"),
+            job_data.get("win_keywords"),
+            urls_text,
+            self._dt_to_str(job_data.get("created_at")),
+            self._dt_to_str(job_data.get("started_at")),
+            self._dt_to_str(job_data.get("completed_at")),
+            1 if job_data.get("cancel_requested") else 0,
+            self._dt_to_str(job_data.get("cancel_requested_at")),
+            snap1.get("success"),
+            snap1.get("errors"),
+            snap1.get("report"),
+            snap2.get("success"),
+            snap2.get("errors"),
+            snap2.get("report"),
+        ))
+        
+        conn.commit()
+        conn.close()
+
+    def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """Get job metadata from database"""
+        conn = self.get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,))
+        row = cursor.fetchone()
+        conn.close()
+        
+        if not row:
+            return None
+        
+        job = dict(row)
+        if "urls" in job:
+            job["urls_raw"] = job.pop("urls") or ""
+        # Reconstruct nested snapshot dicts
+        job["snapshot1"] = {
+            "success": job.pop("snapshot1_success", None),
+            "errors": job.pop("snapshot1_errors", None),
+            "report": job.pop("snapshot1_report", None),
+        }
+        job["snapshot2"] = {
+            "success": job.pop("snapshot2_success", None),
+            "errors": job.pop("snapshot2_errors", None),
+            "report": job.pop("snapshot2_report", None),
+        }
+        job["cancel_requested"] = bool(job.get("cancel_requested"))
+        # Parse timestamps
+        for k in ["created_at", "started_at", "completed_at", "cancel_requested_at"]:
+            if job.get(k):
+                job[k] = self._str_to_dt(job[k])
+        return job
+
+    def get_all_jobs(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Get recent jobs from database"""
+        conn = self.get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT * FROM jobs
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (limit,))
+        
+        rows = cursor.fetchall()
+        conn.close()
+        
+        jobs = []
+        for row in rows:
+            job = dict(row)
+            if "urls" in job:
+                job["urls_raw"] = job.pop("urls") or ""
+            job["snapshot1"] = {
+                "success": job.pop("snapshot1_success", None),
+                "errors": job.pop("snapshot1_errors", None),
+                "report": job.pop("snapshot1_report", None),
+            }
+            job["snapshot2"] = {
+                "success": job.pop("snapshot2_success", None),
+                "errors": job.pop("snapshot2_errors", None),
+                "report": job.pop("snapshot2_report", None),
+            }
+            job["cancel_requested"] = bool(job.get("cancel_requested"))
+            for k in ["created_at", "started_at", "completed_at", "cancel_requested_at"]:
+                if job.get(k):
+                    job[k] = self._str_to_dt(job[k])
+            jobs.append(job)
+        
+        return jobs
+
+    def _dt_to_str(self, dt) -> Optional[str]:
+        """Convert datetime to ISO string for DB storage"""
+        if dt is None:
+            return None
+        if isinstance(dt, datetime):
+            return dt.isoformat()
+        return str(dt)
+
+    def _str_to_dt(self, s: Optional[str]):
+        """Convert ISO string to datetime"""
+        if not s:
+            return None
+        try:
+            return datetime.fromisoformat(s)
+        except:
+            return None
+

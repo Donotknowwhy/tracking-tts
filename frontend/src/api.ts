@@ -29,6 +29,7 @@ export type JobSummary = {
   status: string
   created_at: string
   can_cancel: boolean
+  can_restart?: boolean
   message: string | null
   total_urls: number | null
   processed_urls: number | null
@@ -55,6 +56,7 @@ export type JobDetail = {
   completed_at: string
   outputs: string[]
   can_cancel: boolean
+  can_restart?: boolean
   cancel_requested: boolean
   terminal: boolean
 }
@@ -144,6 +146,19 @@ export async function cancelJob(id: string): Promise<void> {
     method: 'POST',
   })
   if (!r.ok) throw new Error('Hủy job thất bại')
+}
+
+export async function restartJob(id: string): Promise<{ job_id: string }> {
+  const r = await fetch(apiUrl(`/api/jobs/${encodeURIComponent(id)}/restart`), {
+    method: 'POST',
+  })
+  if (!r.ok) {
+    const err = (await r.json().catch(() => ({}))) as { detail?: string }
+    throw new Error(
+      typeof err.detail === 'string' ? err.detail : 'Không chạy lại được job',
+    )
+  }
+  return r.json()
 }
 
 export function fileUrl(name: string) {

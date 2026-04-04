@@ -21,6 +21,7 @@ import {
   ExclamationCircleOutlined,
   InfoCircleOutlined,
   PlayCircleOutlined,
+  RedoOutlined,
   StopOutlined,
 } from '@ant-design/icons'
 import {
@@ -28,6 +29,7 @@ import {
   streamJobs,
   createJob,
   cancelJob,
+  restartJob,
   type JobSummary,
 } from '../api'
 import { trangThaiJob } from '../statusLabels'
@@ -224,6 +226,16 @@ export default function HomePage() {
     })
   }
 
+  const onRestartRow = async (id: string) => {
+    try {
+      await restartJob(id)
+      message.success('Đã chạy lại job')
+      navigate(`/jobs/${id}`)
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Chạy lại thất bại')
+    }
+  }
+
   const columns: ColumnsType<JobSummary> = [
     {
       title: 'Mã job',
@@ -264,20 +276,34 @@ export default function HomePage() {
     {
       title: 'Thao tác',
       key: 'act',
-      width: 96,
-      render: (_, row) =>
-        row.can_cancel ? (
-          <Button
-            size="small"
-            danger
-            icon={<StopOutlined />}
-            onClick={() => confirmCancelRow(row.job_id)}
-          >
-            Hủy
-          </Button>
-        ) : (
-          '—'
-        ),
+      width: 200,
+      render: (_, row) => {
+        if (!row.can_cancel && !row.can_restart) return '—'
+        return (
+          <Space size="small" wrap>
+            {row.can_cancel && (
+              <Button
+                size="small"
+                danger
+                icon={<StopOutlined />}
+                onClick={() => confirmCancelRow(row.job_id)}
+              >
+                Hủy
+              </Button>
+            )}
+            {row.can_restart && (
+              <Button
+                size="small"
+                type="primary"
+                icon={<RedoOutlined />}
+                onClick={() => onRestartRow(row.job_id)}
+              >
+                Chạy lại
+              </Button>
+            )}
+          </Space>
+        )
+      },
     },
   ]
 

@@ -14,7 +14,14 @@ import {
   message,
 } from 'antd'
 import { ArrowLeftOutlined, ExclamationCircleOutlined, StopOutlined } from '@ant-design/icons'
-import { fetchJob, streamJob, cancelJob, fileUrl, type JobDetail } from '../api'
+import {
+  fetchJob,
+  streamJob,
+  cancelJob,
+  restartJob,
+  fileUrl,
+  type JobDetail,
+} from '../api'
 import { trangThaiJob } from '../statusLabels'
 
 const { Title } = Typography
@@ -33,6 +40,8 @@ export default function JobDetailPage() {
   const { jobId } = useParams<{ jobId: string }>()
   const [job, setJob] = useState<JobDetail | null>(null)
   const [loading, setLoading] = useState(true)
+  /** Tăng sau khi chạy lại cùng job_id để mở lại SSE (URL không đổi thì effect cũ không chạy). */
+  const [streamKey, setStreamKey] = useState(0)
 
   const load = useCallback(async () => {
     if (!jobId) return
@@ -50,7 +59,7 @@ export default function JobDetailPage() {
   useEffect(() => {
     setLoading(true)
     load()
-  }, [load])
+  }, [load, streamKey])
 
   useEffect(() => {
     if (!jobId) return
@@ -59,7 +68,7 @@ export default function JobDetailPage() {
       setLoading(false)
     })
     return cleanup
-  }, [jobId])
+  }, [jobId, streamKey])
 
   const doCancel = async () => {
     if (!jobId) return
@@ -69,6 +78,17 @@ export default function JobDetailPage() {
       load()
     } catch {
       message.error('Hủy thất bại')
+    }
+  }
+
+  const doRestart = async () => {
+    if (!jobId) return
+    try {
+      await restartJob(jobId)
+      message.success('Đã chạy lại job này')
+      setStreamKey((k) => k + 1)
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'Chạy lại thất bại')
     }
   }
 
@@ -125,6 +145,11 @@ export default function JobDetailPage() {
               {job.can_cancel && (
                 <Button danger icon={<StopOutlined />} onClick={confirmCancel}>
                   Hủy job
+                </Button>
+              )}
+              {job.can_restart && (
+                <Button type="primary" onClick={doRestart}>
+                  Chạy lại (cùng URL)
                 </Button>
               )}
               <Tag color={statusColor(job.status)}>
