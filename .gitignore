@@ -6,7 +6,8 @@ data/output/
 # Browser profile (contains login session)
 browser_data/
 
-# browser_profiles/ — ignore nội dung qua browser_profiles/.gitignore (file đó là bản ghi duy nhất trong repo)
+# Per-job Chromium copies (web_app: browser_profiles/job_<id>/); cache/LOG/DB — không commit
+browser_profiles/
 
 # Python
 __pycache__/

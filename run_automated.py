@@ -36,6 +36,7 @@ async def run_snapshot(
     session_id: int,
     snapshot_order: int,
     on_progress: Optional[Callable[[int, int], Any]] = None,
+    profile_dir: Optional[str] = None,
 ):
     """Run a snapshot: fetch all products and save to database"""
     db = Database()
@@ -43,7 +44,7 @@ async def run_snapshot(
     logger.info(f"Starting snapshot {snapshot_order} for session {session_id}")
     logger.info(f"Total products to fetch: {len(urls)}")
     
-    async with TikTokScraper() as scraper:
+    async with TikTokScraper(user_data_dir=profile_dir) as scraper:
         results = await scraper.fetch_products(urls, on_progress=on_progress)
     
     logger.info("Saving results to database...")

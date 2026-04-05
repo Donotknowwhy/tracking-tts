@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import threading
 import time
 import uuid
@@ -62,6 +63,47 @@ def _load_jobs_from_db():
             if job.get("session_id"):
                 _sync_outputs_into_job(job)
             jobs[job_id] = job
+
+JOBS_PROFILE_DIR = config.BASE_DIR / "browser_profiles"
+JOBS_PROFILE_DIR.mkdir(exist_ok=True)
+
+BASE_PROFILE_DIR = config.BASE_DIR / "browser_data"
+
+
+def _get_job_profile_dir(job_id: str) -> Path:
+    return JOBS_PROFILE_DIR / f"job_{job_id}"
+
+
+def _create_job_profile(job_id: str) -> str:
+    profile_dir = _get_job_profile_dir(job_id)
+    if profile_dir.exists():
+        shutil.rmtree(profile_dir)
+    if BASE_PROFILE_DIR.exists():
+        shutil.copytree(BASE_PROFILE_DIR, profile_dir)
+    else:
+        profile_dir.mkdir(parents=True, exist_ok=True)
+    return str(profile_dir)
+
+
+def _cleanup_job_profile(job_id: str) -> None:
+    profile_dir = _get_job_profile_dir(job_id)
+    if profile_dir.exists():
+        try:
+            shutil.rmtree(profile_dir)
+        except Exception:
+            pass
+
+
+def _cleanup_stale_profiles() -> None:
+    if not JOBS_PROFILE_DIR.exists():
+        return
+    for entry in JOBS_PROFILE_DIR.iterdir():
+        if entry.is_dir() and entry.name.startswith("job_"):
+            try:
+                shutil.rmtree(entry)
+            except Exception:
+                pass
+
 
 VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 
@@ -395,6 +437,7 @@ def _run_job(
     seo_keywords: str = "",
     win_keywords: str = "",
 ) -> None:
+    profile_dir = _create_job_profile(job_id)
     try:
         def _check_cancel() -> None:
             if _is_cancel_requested(job_id):
@@ -441,7 +484,7 @@ def _run_job(
         )
 
         success1, errors1, snap1_report = asyncio.run(
-            run_snapshot(urls, session_id, snapshot_order=1, on_progress=progress_t1)
+            run_snapshot(urls, session_id, snapshot_order=1, on_progress=progress_t1, profile_dir=profile_dir)
         )
         if total > 0 and success1 == 0:
             db.update_session_status(session_id, "failed")
@@ -488,7 +531,7 @@ def _run_job(
             total_urls=total,
         )
         success2, errors2, snap2_report = asyncio.run(
-            run_snapshot(urls, session_id, snapshot_order=2, on_progress=progress_t2)
+            run_snapshot(urls, session_id, snapshot_order=2, on_progress=progress_t2, profile_dir=profile_dir)
         )
         if total > 0 and success2 == 0:
             db.update_session_status(session_id, "failed")
@@ -509,7 +552,6 @@ def _run_job(
             snapshot2={"success": success2, "errors": errors2, "report": snap2_report},
             status="analyzing",
             message="Đang phân tích và xuất báo cáo…",
-            # Giữ processed_urls = total (đã fetch xong cả 2 snapshot), tránh UI hiển thị 0/total
             processed_urls=total,
             total_urls=total,
         )
@@ -545,6 +587,8 @@ def _run_job(
         )
     except Exception as exc:  # pragma: no cover
         _set_job(job_id, status="failed", message=f"Lỗi: {exc}", completed_at=_now_vn())
+    finally:
+        _cleanup_job_profile(job_id)
 
 
 class CreateJobBody(BaseModel):
@@ -709,6 +753,7 @@ _FRONTEND_DIST = _BASE_DIR / "frontend" / "dist"
 # Load jobs from DB on startup; job đang chạy trong DB nhưng không còn thread → failed
 _load_jobs_from_db()
 _reconcile_orphan_jobs_on_startup()
+_cleanup_stale_profiles()
 
 if _FRONTEND_DIST.is_dir():
     app.mount("/", StaticFiles(directory=str(_FRONTEND_DIST), html=True), name="spa")
