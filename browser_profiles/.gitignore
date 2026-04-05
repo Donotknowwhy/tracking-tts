@@ -1,0 +1,3 @@
+# Chromium / Playwright user data (job_*/cache/LOG/DB/…). Không commit.
+**
+!.gitignore

@@ -1,0 +1,10 @@
+{
+  "files.watcherExclude": {
+    "**/browser_profiles/**": true,
+    "**/browser_data/**": true
+  },
+  "search.exclude": {
+    "**/browser_profiles": true,
+    "**/browser_data": true
+  }
+}
