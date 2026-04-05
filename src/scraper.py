@@ -24,10 +24,11 @@ class TikTokScraper:
     4. Supports concurrent fetching (configurable concurrency per job)
     """
     
-    def __init__(self):
+    def __init__(self, user_data_dir: str = None):
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
         self.playwright = None
+        self._user_data_dir = user_data_dir or config.SCRAPING_CONFIG['user_data_dir']
     
     async def __aenter__(self):
         """Async context manager entry"""
@@ -47,7 +48,7 @@ class TikTokScraper:
         
         # Use persistent context to save cookies/session
         # This way, once CAPTCHA is solved, it stays solved
-        user_data_dir = config.SCRAPING_CONFIG['user_data_dir']
+        user_data_dir = self._user_data_dir
         
         # Setup proxy (HTTP with auth is supported!)
         proxy_config = None

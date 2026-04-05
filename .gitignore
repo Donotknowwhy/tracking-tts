@@ -6,6 +6,9 @@ data/output/
 # Browser profile (contains login session)
 browser_data/
 
+# Per-job Chromium copies (web_app: browser_profiles/job_<id>/); cache/LOG/DB — không commit
+browser_profiles/
+
 # Python
 __pycache__/
 *.pyc
