@@ -380,17 +380,14 @@ export default function HomePage() {
       </Card>
 
       <Card title="Job gần đây">
-        <div style={{ width: '100%', overflowX: 'auto' }}>
-          <Table<JobSummary>
-            rowKey="job_id"
-            loading={loading}
-            columns={columns}
-            dataSource={jobs}
-            pagination={false}
-            size="middle"
-            scroll={{ x: 860 }}
-          />
-        </div>
+        <Table<JobSummary>
+          rowKey="job_id"
+          loading={loading}
+          columns={columns}
+          dataSource={jobs}
+          pagination={{ pageSize: 20, showSizeChanger: false }}
+          size="middle"
+        />
       </Card>
     </Space>
   )

@@ -25,7 +25,7 @@ import json
 import config
 from src.database import Database
 from src.proxy_check import is_http_proxy_configured, verify_http_proxy
-from run_automated import run_snapshot, run_analysis
+from run_automated import run_snapshot, run_analysis, CaptchaError
 
 
 app = FastAPI(title="TikTok Tracking UI")
@@ -483,9 +483,20 @@ def _run_job(
             started_at=_now_vn(),
         )
 
-        success1, errors1, snap1_report = asyncio.run(
-            run_snapshot(urls, session_id, snapshot_order=1, on_progress=progress_t1, profile_dir=profile_dir)
-        )
+        try:
+            success1, errors1, snap1_report = asyncio.run(
+                run_snapshot(urls, session_id, snapshot_order=1, on_progress=progress_t1, profile_dir=profile_dir)
+            )
+        except CaptchaError as exc:
+            _fail_job(
+                job_id,
+                f"CAPTCHA block: TikTok chặn scraping. "
+                f"Không thể tiếp tục snapshot 1 cho job này. "
+                f"Chi tiết: {exc}",
+                session_id=session_id,
+            )
+            return
+
         if total > 0 and success1 == 0:
             db.update_session_status(session_id, "failed")
             _fail_job(
@@ -530,9 +541,23 @@ def _run_job(
             processed_urls=0,
             total_urls=total,
         )
-        success2, errors2, snap2_report = asyncio.run(
-            run_snapshot(urls, session_id, snapshot_order=2, on_progress=progress_t2, profile_dir=profile_dir)
-        )
+        try:
+            success2, errors2, snap2_report = asyncio.run(
+                run_snapshot(urls, session_id, snapshot_order=2, on_progress=progress_t2, profile_dir=profile_dir)
+            )
+        except CaptchaError as exc:
+            with jobs_lock:
+                snap1_meta = (jobs.get(job_id) or {}).get("snapshot1")
+            _fail_job(
+                job_id,
+                f"CAPTCHA block: TikTok chặn scraping. "
+                f"Không thể tiếp tục snapshot 2 cho job này. "
+                f"Chi tiết: {exc}",
+                session_id=session_id,
+                snapshot1=snap1_meta,
+            )
+            return
+
         if total > 0 and success2 == 0:
             db.update_session_status(session_id, "failed")
             with jobs_lock:

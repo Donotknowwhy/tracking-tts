@@ -22,6 +22,10 @@ PROXY_USERNAME = "KgVOxvHW"
 PROXY_PASSWORD = "8BYAZdC83i37"
 PROXY_TYPE = "http"
 
+# SadCaptcha API key — register at https://www.sadcaptcha.com/
+# New accounts get 25 free credits. Leave empty to skip auto-solve (CAPTCHA -> job failed).
+SADCAPTCHA_API_KEY = os.getenv("SADCAPTCHA_API_KEY", "")
+
 
 def _build_proxy_url() -> str:
     return f"{PROXY_TYPE}://{PROXY_USERNAME}:{PROXY_PASSWORD}@{PROXY_SERVER}:{PROXY_PORT}"
@@ -94,9 +98,11 @@ SCRAPING_CONFIG = {
     "delay_max": 8,          # Maximum delay between requests (seconds)
     "max_retries": 3,        # Max retry attempts per product
     "timeout": 30000,        # Page load timeout (milliseconds)
-    "headless": True,        # True: chạy ngầm; False: bật cửa sổ (debug/CAPTCHA)
+    "headless": False,        # True: chạy ngầm; False: bật cửa sổ (debug/CAPTCHA)
+    # Khi headless=False và gặp CAPTCHA: chờ tối đa bấy nhiêu giây để giải tay trên cửa sổ browser.
+    "captcha_wait_seconds": 600,
     "user_data_dir": str(BASE_DIR / "browser_data"),  # Persistent browser profile
-    "concurrency": 3,        # Max concurrent URL fetches per job (3-5 recommended)
+    "concurrency": 1,        # Max concurrent URL fetches per job (1 = 1 tab tại một thời điểm)
 }
 
 # Tracking configuration

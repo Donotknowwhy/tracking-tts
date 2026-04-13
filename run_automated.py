@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import config
 from src.database import Database
 from src.proxy_check import is_http_proxy_configured, verify_http_proxy
-from src.scraper import TikTokScraper
+from src.scraper import TikTokScraper, CaptchaError
 from src.analyzer import compute_growth, extract_keywords
 from src.exporter import export_to_csv, export_to_excel, export_snapshot_to_excel, print_summary
 
@@ -45,7 +45,11 @@ async def run_snapshot(
     logger.info(f"Total products to fetch: {len(urls)}")
     
     async with TikTokScraper(user_data_dir=profile_dir) as scraper:
-        results = await scraper.fetch_products(urls, on_progress=on_progress)
+        try:
+            results = await scraper.fetch_products(urls, on_progress=on_progress)
+        except CaptchaError as exc:
+            logger.error("CAPTCHA block — aborting snapshot: %s", exc)
+            raise
     
     logger.info("Saving results to database...")
     
