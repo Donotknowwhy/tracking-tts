@@ -26,10 +26,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def read_urls_from_file(filepath: str) -> list:
-    """Read product URLs from text file"""
+    """Read product URLs from text file, resolving any mobile/short URLs to desktop."""
+    from src.parser import resolve_tiktok_mobile_url
+
     with open(filepath, 'r', encoding='utf-8') as f:
-        urls = [line.strip() for line in f if line.strip() and not line.startswith('#')]
-    return urls
+        raw_urls = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+    resolved = [resolve_tiktok_mobile_url(u) for u in raw_urls]
+    return resolved
 
 async def run_snapshot(
     urls: list,
@@ -37,14 +40,15 @@ async def run_snapshot(
     snapshot_order: int,
     on_progress: Optional[Callable[[int, int], Any]] = None,
     profile_dir: Optional[str] = None,
+    adspower_profile_id: Optional[str] = None,
 ):
     """Run a snapshot: fetch all products and save to database"""
     db = Database()
     
     logger.info(f"Starting snapshot {snapshot_order} for session {session_id}")
     logger.info(f"Total products to fetch: {len(urls)}")
-    
-    async with TikTokScraper(user_data_dir=profile_dir) as scraper:
+
+    async with TikTokScraper(user_data_dir=profile_dir, adspower_profile_id=adspower_profile_id) as scraper:
         try:
             results = await scraper.fetch_products(urls, on_progress=on_progress)
         except CaptchaError as exc:

@@ -44,11 +44,14 @@ class TrackingScheduler:
         session_id: int,
         snapshot_order: int,
         on_progress: Optional[Callable[[int, int], Any]] = None,
+        adspower_profile_id: Optional[str] = None,
     ):
         """Run a snapshot"""
+        import config as cfg
+        profile_dir = None  # scheduler doesn't use profile dirs
         logger.info(f"[Session {session_id}] Running snapshot {snapshot_order}")
-        
-        async with TikTokScraper() as scraper:
+
+        async with TikTokScraper(user_data_dir=profile_dir, adspower_profile_id=adspower_profile_id) as scraper:
             results = await scraper.fetch_products(urls, on_progress=on_progress)
         
         success_count = 0
@@ -112,17 +115,20 @@ class TrackingScheduler:
     def schedule_tracking(self, urls_file: str, interval_hours: float = None):
         """
         Schedule automated tracking
-        
+
         Args:
             urls_file: Path to URLs file
             interval_hours: Hours between snapshots
         """
         if interval_hours is None:
             interval_hours = config.TRACKING_CONFIG['check_interval_hours']
-        
-        # Read URLs
+
+        # Read URLs and resolve mobile/short links to desktop
+        from src.parser import resolve_tiktok_mobile_url
+
         with open(urls_file, 'r') as f:
-            urls = [line.strip() for line in f if line.strip()]
+            raw_urls = [line.strip() for line in f if line.strip()]
+        urls = [resolve_tiktok_mobile_url(u) for u in raw_urls]
         
         # Create session
         session_id = self.db.create_session(

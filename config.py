@@ -2,6 +2,12 @@ import os
 from pathlib import Path
 from urllib.parse import urlparse, unquote
 
+# Load .env first so PROXY / TikTok / AdsPower env vars apply before defaults below.
+if Path(__file__).resolve().parent.joinpath(".env").exists():
+    from dotenv import load_dotenv
+
+    load_dotenv(Path(__file__).resolve().parent / ".env")
+
 # Project paths
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
@@ -12,26 +18,37 @@ DB_PATH = DATA_DIR / "tracking.db"
 DATA_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-# Proxy configuration (default)
-# You can override at runtime using:
-#   - environment variable: TTS_PROXY
-#   - CLI flag: --proxy in auto_track.py
-PROXY_SERVER = "191.101.251.108"
-PROXY_PORT = 20826
-PROXY_USERNAME = "KgVOxvHW"
-PROXY_PASSWORD = "8BYAZdC83i37"
-PROXY_TYPE = "http"
+# ─── Proxy (optional) ─────────────────────────────────────────────────────────
+# Không dùng khi bật AdsPower (ADSPOWER_PROFILE_ID): traffic đi qua proxy trong profile AdsPower.
+# Chỉ áp cho: (1) Playwright không AdsPower, (2) SadCaptcha (PROXY_URL nếu có).
+# Cấu hình: biến môi trường TTS_PROXY hoặc --proxy trong auto_track.py (gọi apply_proxy).
+PROXY_SERVER = None  # type: ignore[assignment]
+PROXY_PORT = None  # type: ignore[assignment]
+PROXY_USERNAME = ""
+PROXY_PASSWORD = ""
+PROXY_TYPE = None  # type: ignore[assignment]
+PROXY_URL = ""
 
 # SadCaptcha API key — register at https://www.sadcaptcha.com/
 # New accounts get 25 free credits. Leave empty to skip auto-solve (CAPTCHA -> job failed).
-SADCAPTCHA_API_KEY = os.getenv("SADCAPTCHA_API_KEY", "")
+SADCAPTCHA_API_KEY = os.getenv("SADCAPTCHA_API_KEY", "e777b3361be547ff31e53ca5c85eecb6")
+
+# ─── AdsPower Integration ─────────────────────────────────────────────────────
+# If ADSPOWER_PROFILE_ID is set, scraper will use AdsPower browser via CDP
+# instead of launching a new Playwright browser. The AdsPower profile must be
+# logged into TikTok first (use export_cookies_adspower.py to refresh cookies).
+# Env vars: ADSPOWER_API_KEY, ADSPOWER_BASE (default http://127.0.0.1:50325)
+ADSPOWER_PROFILE_ID = os.getenv("ADSPOWER_PROFILE_ID", "").strip() or None
 
 
 def _build_proxy_url() -> str:
-    return f"{PROXY_TYPE}://{PROXY_USERNAME}:{PROXY_PASSWORD}@{PROXY_SERVER}:{PROXY_PORT}"
-
-
-PROXY_URL = _build_proxy_url()
+    if not PROXY_SERVER or not PROXY_PORT or PROXY_TYPE not in ("http", "socks5"):
+        return ""
+    user = PROXY_USERNAME or ""
+    pwd = PROXY_PASSWORD or ""
+    if user or pwd:
+        return f"{PROXY_TYPE}://{user}:{pwd}@{PROXY_SERVER}:{PROXY_PORT}"
+    return f"{PROXY_TYPE}://{PROXY_SERVER}:{PROXY_PORT}"
 
 
 def apply_proxy(proxy_input: str) -> None:
@@ -92,6 +109,7 @@ def apply_proxy(proxy_input: str) -> None:
     PROXY_PASSWORD = unquote(parsed.password or "")
     PROXY_URL = _build_proxy_url()
 
+
 # Scraping configuration
 SCRAPING_CONFIG = {
     "delay_min": 3,          # Minimum delay between requests (seconds)
@@ -139,21 +157,15 @@ KEYWORD_CONFIG = {
 TIKTOK_EMAIL = None     # Set to "your_email@example.com" or keep None
 TIKTOK_PASSWORD = None  # Set to "your_password" or keep None
 
-# Alternative: Use .env file for security
-# Create .env file with:
-#   TIKTOK_EMAIL=your_email@example.com
-#   TIKTOK_PASSWORD=your_password
-from pathlib import Path
-if Path('.env').exists():
-    from dotenv import load_dotenv
-    load_dotenv()
-    TIKTOK_EMAIL = os.getenv('TIKTOK_EMAIL', TIKTOK_EMAIL)
-    TIKTOK_PASSWORD = os.getenv('TIKTOK_PASSWORD', TIKTOK_PASSWORD)
+# TikTok login + optional proxy string from .env (dotenv already loaded at top)
+TIKTOK_EMAIL = os.getenv("TIKTOK_EMAIL", TIKTOK_EMAIL)
+TIKTOK_PASSWORD = os.getenv("TIKTOK_PASSWORD", TIKTOK_PASSWORD)
 
-# Optional proxy override from env
-runtime_proxy = os.getenv("TTS_PROXY")
+runtime_proxy = (os.getenv("TTS_PROXY") or "").strip()
 if runtime_proxy:
     apply_proxy(runtime_proxy)
+else:
+    PROXY_URL = _build_proxy_url()
 USER_AGENTS = [
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',

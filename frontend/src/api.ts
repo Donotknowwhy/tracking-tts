@@ -61,11 +61,24 @@ export type JobDetail = {
   terminal: boolean
 }
 
+export type SadcaptchaCredits = {
+  enabled: boolean
+  credits: number | null
+  ok: boolean
+  message: string
+}
+
 export async function fetchJobs(): Promise<JobSummary[]> {
   const r = await fetch(apiUrl('/api/jobs'))
   if (!r.ok) throw new Error('Không tải được danh sách job')
   const d = await r.json()
   return d.jobs ?? []
+}
+
+export async function fetchSadcaptchaCredits(): Promise<SadcaptchaCredits> {
+  const r = await fetch(apiUrl('/api/captcha/credits'))
+  if (!r.ok) throw new Error('Không lấy được credits SadCaptcha')
+  return r.json()
 }
 
 export function streamJobs(onData: (jobs: JobSummary[]) => void): () => void {

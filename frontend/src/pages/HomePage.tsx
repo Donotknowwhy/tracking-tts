@@ -26,11 +26,13 @@ import {
 } from '@ant-design/icons'
 import {
   fetchJobs,
+  fetchSadcaptchaCredits,
   streamJobs,
   createJob,
   cancelJob,
   restartJob,
   type JobSummary,
+  type SadcaptchaCredits,
 } from '../api'
 import { trangThaiJob } from '../statusLabels'
 import { parseUrlsDedupe } from '../parseUrls'
@@ -102,6 +104,8 @@ export default function HomePage() {
   const [jobs, setJobs] = useState<JobSummary[]>([])
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [captchaCredits, setCaptchaCredits] = useState<SadcaptchaCredits | null>(null)
+  const [captchaLoading, setCaptchaLoading] = useState(false)
 
   const load = async () => {
     setLoading(true)
@@ -114,8 +118,25 @@ export default function HomePage() {
     }
   }
 
+  const loadCaptchaCredits = async () => {
+    setCaptchaLoading(true)
+    try {
+      setCaptchaCredits(await fetchSadcaptchaCredits())
+    } catch {
+      setCaptchaCredits({
+        enabled: true,
+        credits: null,
+        ok: false,
+        message: 'Không kiểm tra được credits SadCaptcha',
+      })
+    } finally {
+      setCaptchaLoading(false)
+    }
+  }
+
   useEffect(() => {
     load()
+    loadCaptchaCredits()
     const cleanup = streamJobs((jobs) => {
       setJobs(jobs)
       setLoading(false)
@@ -318,6 +339,35 @@ export default function HomePage() {
           (UTC+7).
         </Paragraph>
       </div>
+
+      <Card
+        title="SadCaptcha Credits"
+        extra={
+          <Button size="small" onClick={loadCaptchaCredits} loading={captchaLoading}>
+            Refresh
+          </Button>
+        }
+      >
+        {captchaCredits ? (
+          <Space direction="vertical" size={4}>
+            <div>
+              Trạng thái:{' '}
+              <Tag color={captchaCredits.ok ? 'success' : 'error'}>
+                {captchaCredits.ok ? 'OK' : 'Cần kiểm tra'}
+              </Tag>
+            </div>
+            <Typography.Text>
+              Credits còn lại:{' '}
+              {captchaCredits.credits === null ? 'N/A' : captchaCredits.credits}
+            </Typography.Text>
+            <Typography.Text type={captchaCredits.ok ? 'secondary' : 'danger'}>
+              {captchaCredits.message}
+            </Typography.Text>
+          </Space>
+        ) : (
+          <Typography.Text type="secondary">Đang tải credits SadCaptcha…</Typography.Text>
+        )}
+      </Card>
 
       <Card title="Chạy tracking mới">
         <Form

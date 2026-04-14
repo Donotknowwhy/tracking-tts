@@ -10,6 +10,9 @@ import shutil
 import threading
 import time
 import uuid
+from urllib.parse import urlencode
+from urllib.request import Request as UrlRequest, urlopen
+from urllib.error import URLError, HTTPError
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List
@@ -51,6 +54,76 @@ db = Database()
 
 jobs_lock = threading.Lock()
 jobs: Dict[str, Dict[str, Any]] = {}
+
+
+def _sadcaptcha_credits_payload() -> Dict[str, Any]:
+    """Fetch SadCaptcha credits for current API key."""
+    api_key = (getattr(config, "SADCAPTCHA_API_KEY", "") or "").strip()
+    if not api_key:
+        return {
+            "enabled": False,
+            "credits": None,
+            "ok": False,
+            "message": "Chưa cấu hình SADCAPTCHA_API_KEY.",
+        }
+
+    params = urlencode({"licenseKey": api_key})
+    url = f"https://www.sadcaptcha.com/api/v1/license/credits?{params}"
+    req = UrlRequest(url, headers={"accept": "application/json"})
+    try:
+        with urlopen(req, timeout=10) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+        data = json.loads(raw)
+        credits_raw = data.get("credits")
+        credits = int(credits_raw) if credits_raw is not None else None
+        if credits is None:
+            return {
+                "enabled": True,
+                "credits": None,
+                "ok": False,
+                "message": "Không đọc được credits từ SadCaptcha.",
+            }
+        if credits <= 0:
+            return {
+                "enabled": True,
+                "credits": credits,
+                "ok": False,
+                "message": "SadCaptcha đã hết credits.",
+            }
+        return {
+            "enabled": True,
+            "credits": credits,
+            "ok": True,
+            "message": "SadCaptcha đang hoạt động.",
+        }
+    except HTTPError as exc:
+        return {
+            "enabled": True,
+            "credits": None,
+            "ok": False,
+            "message": f"SadCaptcha API HTTP {exc.code}.",
+        }
+    except URLError as exc:
+        return {
+            "enabled": True,
+            "credits": None,
+            "ok": False,
+            "message": f"Không kết nối được SadCaptcha: {exc.reason}",
+        }
+    except (ValueError, json.JSONDecodeError):
+        return {
+            "enabled": True,
+            "credits": None,
+            "ok": False,
+            "message": "Phản hồi SadCaptcha không hợp lệ.",
+        }
+    except Exception as exc:
+        return {
+            "enabled": True,
+            "credits": None,
+            "ok": False,
+            "message": f"Lỗi kiểm tra SadCaptcha: {exc}",
+        }
 
 # Load jobs from DB on startup
 def _load_jobs_from_db():
@@ -139,7 +212,10 @@ def _url_dedup_key(url: str) -> str:
 
 
 def _parse_urls_dedupe(raw: str) -> List[str]:
-    """Mỗi dòng một URL; bỏ comment #; loại trùng, giữ thứ tự xuất hiện đầu tiên."""
+    """Mỗi dòng một URL; bỏ comment #; loại trùng, giữ thứ tự xuất hiện đầu tiên.
+    Mobile/short links (vm.tiktok.com) are pre-resolved to desktop URLs before dedup."""
+    from src.parser import resolve_tiktok_mobile_url
+
     lines = [
         line.strip()
         for line in raw.splitlines()
@@ -152,7 +228,7 @@ def _parse_urls_dedupe(raw: str) -> List[str]:
         if not key or key in seen:
             continue
         seen.add(key)
-        out.append(line)
+        out.append(resolve_tiktok_mobile_url(line))
     return out
 
 
@@ -485,7 +561,7 @@ def _run_job(
 
         try:
             success1, errors1, snap1_report = asyncio.run(
-                run_snapshot(urls, session_id, snapshot_order=1, on_progress=progress_t1, profile_dir=profile_dir)
+                run_snapshot(urls, session_id, snapshot_order=1, on_progress=progress_t1, profile_dir=profile_dir, adspower_profile_id=config.ADSPOWER_PROFILE_ID)
             )
         except CaptchaError as exc:
             _fail_job(
@@ -543,7 +619,7 @@ def _run_job(
         )
         try:
             success2, errors2, snap2_report = asyncio.run(
-                run_snapshot(urls, session_id, snapshot_order=2, on_progress=progress_t2, profile_dir=profile_dir)
+                run_snapshot(urls, session_id, snapshot_order=2, on_progress=progress_t2, profile_dir=profile_dir, adspower_profile_id=config.ADSPOWER_PROFILE_ID)
             )
         except CaptchaError as exc:
             with jobs_lock:
@@ -628,6 +704,11 @@ class CreateJobBody(BaseModel):
 def api_jobs_list() -> Dict[str, Any]:
     recent = _recent_jobs_sorted(50)
     return {"jobs": [_job_summary(j) for j in recent]}
+
+
+@app.get("/api/captcha/credits")
+def api_sadcaptcha_credits() -> Dict[str, Any]:
+    return _sadcaptcha_credits_payload()
 
 
 @app.get("/api/jobs/stream")

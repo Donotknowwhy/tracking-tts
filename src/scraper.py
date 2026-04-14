@@ -1,10 +1,58 @@
 import asyncio
 import random
 import logging
+import os
 from typing import Optional, Dict, Any, Callable
 from playwright.async_api import async_playwright, Browser, Page, BrowserContext
 import config
 from src.parser import parse_product_page, extract_product_id
+
+# ─── AdsPower integration ────────────────────────────────────────────────────
+
+def _adspower_available() -> bool:
+    """Check if AdsPower integration is configured."""
+    return bool(os.getenv("ADSPOWER_API_KEY", "").strip())
+
+async def _get_adspower_browser(profile_id: str):
+    """
+    Start AdsPower profile and return WebSocket CDP URL.
+    Returns (ws_url, debug_port) on success, raises on failure.
+    """
+    import httpx
+    api_key = os.getenv("ADSPOWER_API_KEY", "").strip()
+    base = os.getenv("ADSPOWER_BASE", "http://127.0.0.1:50325")
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        r = await client.post(
+            f"{base}/api/v2/browser-profile/start",
+            headers=headers,
+            json={"profile_id": profile_id, "last_opened_tabs": "0", "proxy_detection": "0"},
+        )
+        data = r.json()
+        if data.get("code") != 0:
+            raise RuntimeError(f"AdsPower start failed: {data.get('msg', data)}")
+        ws = (data.get("data") or {}).get("ws", {}).get("puppeteer")
+        if not ws:
+            raise RuntimeError(f"No puppeteer ws in AdsPower response: {data}")
+        debug_port = (data.get("data") or {}).get("debug_port", "")
+        return ws, debug_port
+
+async def _stop_adspower_browser(profile_id: str):
+    """Stop AdsPower browser."""
+    import httpx
+    api_key = os.getenv("ADSPOWER_API_KEY", "").strip()
+    base = os.getenv("ADSPOWER_BASE", "http://127.0.0.1:50325")
+    headers = {"Authorization": f"Bearer {api_key}"}
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            await client.post(
+                f"{base}/api/v2/browser-profile/stop",
+                headers=headers,
+                json={"profile_id": profile_id},
+            )
+    except Exception:
+        pass
 
 # ─── SadCaptcha auto-solve helpers ─────────────────────────────────────────────
 
@@ -25,7 +73,7 @@ async def _try_solve_captcha(page: Page) -> bool:
     try:
         from tiktok_captcha_solver import AsyncPlaywrightSolver
 
-        proxy_str = getattr(config, "PROXY_URL", None)
+        proxy_str = (getattr(config, "PROXY_URL", None) or "").strip() or None
         solver = AsyncPlaywrightSolver(page, api_key, proxy=proxy_str)
         for attempt in range(3):
             try:
@@ -140,19 +188,22 @@ class CaptchaError(Exception):
 class TikTokScraper:
     """
     TikTok Shop scraper using Playwright with stealth mode
-    
+
     NOTE: Due to TikTok's CAPTCHA protection, this scraper:
     1. Runs browser in headless or visible mode (configurable)
     2. Uses stealth techniques to avoid detection
     3. May require manual CAPTCHA solving on first run
     4. Supports concurrent fetching (configurable concurrency per job)
+    5. Supports AdsPower browser via CDP connection (set ADSPOWER_PROFILE_ID env)
     """
-    
-    def __init__(self, user_data_dir: str = None):
+
+    def __init__(self, user_data_dir: str = None, adspower_profile_id: str = None):
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
         self.playwright = None
         self._user_data_dir = user_data_dir or config.SCRAPING_CONFIG['user_data_dir']
+        # If ADSPOWER_PROFILE_ID env is set, use AdsPower browser via CDP
+        self._adspower_profile_id = adspower_profile_id or os.getenv("ADSPOWER_PROFILE_ID", "").strip() or None
     
     async def __aenter__(self):
         """Async context manager entry"""
@@ -164,9 +215,48 @@ class TikTokScraper:
         await self.close()
     
     async def start(self):
-        """Start browser with persistent context to remember cookies"""
+        """Start browser — AdsPower CDP if configured, otherwise standard Playwright."""
         self.playwright = await async_playwright().start()
-        
+
+        # ── AdsPower CDP path ───────────────────────────────────────────────
+        if self._adspower_profile_id:
+            logger.info("Using AdsPower browser via CDP for profile: %s", self._adspower_profile_id)
+            ws_url, debug_port = await _get_adspower_browser(self._adspower_profile_id)
+            logger.info("AdsPower CDP connected (debug_port=%s, ws=%s)", debug_port, ws_url)
+
+            # Connect Playwright to the existing AdsPower browser
+            self.browser = await self.playwright.chromium.connect_over_cdp(ws_url)
+
+            # Use the browser's FIRST context (the real profile context with all cookies
+            # and existing tabs). Do NOT create a new incognito context — we need the
+            # cookies that are already set for vm.tiktok.com redirects.
+            contexts = self.browser.contexts
+            if contexts:
+                self.context = contexts[0]
+                logger.info("Using AdsPower default context (has login cookies + existing tabs)")
+                
+                # Close old pages to avoid navigation conflicts
+                # (Keep only 1 blank page for scraping)
+                existing_pages = self.context.pages
+                if len(existing_pages) > 1:
+                    logger.info(f"Found {len(existing_pages)} existing pages — closing old ones...")
+                    for i, old_page in enumerate(existing_pages):
+                        if i > 0:  # Keep first page
+                            try:
+                                await old_page.close()
+                                logger.info(f"Closed old page {i}: {old_page.url[:80] if old_page.url else 'blank'}")
+                            except Exception as e:
+                                logger.warning(f"Could not close page {i}: {e}")
+            else:
+                self.context = await self.browser.new_context()
+                logger.warning("No existing contexts — created fresh context (may lack cookies)")
+
+            # Store profile_id so we can stop it later
+            self._adspower_profile_id_for_stop = self._adspower_profile_id
+            logger.info("AdsPower browser connected (default context)")
+            return
+
+        # ── Standard Playwright path ─────────────────────────────────────────
         logger.info("Starting browser with persistent context")
         logger.info("NOTE: Browser will stay open to maintain session cookies")
         
@@ -174,15 +264,17 @@ class TikTokScraper:
         # This way, once CAPTCHA is solved, it stays solved
         user_data_dir = self._user_data_dir
         
-        # Setup proxy (HTTP with auth is supported!)
+        # Setup proxy (HTTP/SOCKS5 with auth is supported!) — only when configured in config
         proxy_config = None
-        if config.PROXY_TYPE == "http":
+        if config.PROXY_TYPE in ("http", "socks5") and getattr(config, "PROXY_SERVER", None):
             proxy_config = {
-                "server": f"http://{config.PROXY_SERVER}:{config.PROXY_PORT}",
+                "server": f"{config.PROXY_SERVER}:{config.PROXY_PORT}",
                 "username": config.PROXY_USERNAME,
                 "password": config.PROXY_PASSWORD,
             }
-            logger.info(f"Using HTTP proxy: {config.PROXY_SERVER}:{config.PROXY_PORT}")
+            if config.PROXY_TYPE == "socks5":
+                proxy_config["protocol"] = "socks5"
+            logger.info(f"Using {config.PROXY_TYPE} proxy: {config.PROXY_SERVER}:{config.PROXY_PORT}")
         
         # Randomize fingerprint per browser launch
         viewport = _random_viewport()
@@ -270,8 +362,19 @@ class TikTokScraper:
     
     async def close(self):
         """Close browser and playwright"""
-        if self.context:
-            await self.context.close()
+        if self._adspower_profile_id_for_stop:
+            # Disconnect CDP first, then tell AdsPower to stop the real browser
+            if self.browser:
+                try:
+                    await self.browser.disconnect()
+                except Exception:
+                    pass
+            logger.info("Stopping AdsPower browser for profile: %s", self._adspower_profile_id_for_stop)
+            await _stop_adspower_browser(self._adspower_profile_id_for_stop)
+            self._adspower_profile_id_for_stop = None
+        else:
+            if self.context:
+                await self.context.close()
         if self.playwright:
             await self.playwright.stop()
     
@@ -297,7 +400,9 @@ class TikTokScraper:
                 logger.info(f"Fetching (attempt {attempt + 1}/{max_retries}): {url}")
                 
                 # Navigate to page
-                response = await page.goto(url, wait_until='domcontentloaded', timeout=60000)
+                # Use 'load' to wait for page to be stable (avoid "context destroyed" on redirect)
+                # TikTok short links redirect through several hops before delivering HTML
+                response = await page.goto(url, wait_until='load', timeout=120000)
                 
                 if not response or response.status != 200:
                     logger.warning(f"Non-200 status for {url}")
@@ -305,9 +410,35 @@ class TikTokScraper:
                         await asyncio.sleep(3)
                         continue
                 
+                # Wait a bit for any post-load redirects to settle
+                await asyncio.sleep(1.5)
+                
+                # Check if page redirected away (e.g. to login/verify)
+                current_url = page.url
+                if "login" in current_url.lower() or "verify" in current_url.lower():
+                    logger.warning(f"Page redirected to login/verify: {current_url}")
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(5)
+                        continue
+                    else:
+                        raise ValueError(f"Cannot access product page - redirected to: {current_url}")
+                
                 # CAPTCHA: thử auto-solve trước (SadCaptcha API).
                 # Nếu không có API key hoặc fail → fallback: chờ tay (headless=False) hoặc fail ngay.
-                title = await page.title()
+                try:
+                    title = await page.title()
+                except Exception as title_err:
+                    # If page is still navigating, wait and retry
+                    logger.warning(f"Could not get page title (navigation?): {title_err}")
+                    await asyncio.sleep(2)
+                    try:
+                        title = await page.title()
+                    except Exception:
+                        logger.error(f"Still cannot get title after retry - page may be unstable")
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(5)
+                            continue
+                        raise
                 if _page_title_is_captcha(title):
                     headless = bool(config.SCRAPING_CONFIG.get("headless", True))
                     logger.warning(f"CAPTCHA detected! Page title: {title}")
@@ -360,6 +491,10 @@ class TikTokScraper:
 
                 # Parse content
                 parsed_data = parse_product_page(html_content)
+                # DB / export expect string price; parser may return float from UIText1 spans
+                raw_price = parsed_data.get("price")
+                if isinstance(raw_price, float):
+                    raw_price = str(raw_price)
 
                 # Validate required fields
                 if not parsed_data['title']:
@@ -383,7 +518,7 @@ class TikTokScraper:
                     'product_url': url,
                     'product_title': parsed_data['title'],
                     'sold_count': parsed_data['sold_count'],
-                    'price': parsed_data.get('price'),
+                    'price': raw_price,
                     'status': 'success' if parsed_data['sold_count'] is not None else 'no_sold_count',
                     'error_message': None
                 }
