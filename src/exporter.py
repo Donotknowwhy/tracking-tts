@@ -108,6 +108,7 @@ def export_to_csv(analysis_results: List[Dict[str, Any]],
                 'keyword_niche',
                 'keyword_type',
                 'frequency',
+                'win_ratio',
                 'keyword_win_check',
             ]
 
@@ -121,6 +122,7 @@ def export_to_csv(analysis_results: List[Dict[str, Any]],
                     'keyword_niche': row.get('keyword_niche', ''),
                     'keyword_type': row['keyword_type'],
                     'frequency': row['frequency'],
+                    'win_ratio': f"{row.get('win_ratio', 0):.2%}",
                     'keyword_win_check': row.get('keyword_win_check', ''),
                 })
     
@@ -180,6 +182,7 @@ def export_to_excel(analysis_results: List[Dict[str, Any]],
         "Keyword niche",
         "Loại",
         "Tần suất",
+        "Win Ratio (B/A)",
         "Keyword cần kiểm tra mức độ win",
     ]
     ws_keywords.append(keyword_headers)
@@ -191,6 +194,7 @@ def export_to_excel(analysis_results: List[Dict[str, Any]],
             kw.get("keyword_niche", ""),
             kw["keyword_type"],
             kw["frequency"],
+            f"{kw.get('win_ratio', 0):.2%}",
             kw.get("keyword_win_check", ""),
         ])
 
@@ -293,9 +297,11 @@ def print_summary(analysis_results: List[Dict[str, Any]],
         seo = kw.get("keyword_seo") or ""
         niche = kw.get("keyword_niche") or ""
         label = f"SEO: {seo}" if seo else f"niche: {niche}"
+        win_flag = "✓ WIN" if kw.get("keyword_win_check") else ""
         print(
             f"{kw['rank']}. {label} "
-            f"({kw['keyword_type']}) — {kw['frequency']} occurrences"
+            f"({kw['keyword_type']}) — freq={kw['frequency']}, "
+            f"win_ratio={kw.get('win_ratio', 0):.2%} {win_flag}"
         )
     
     print("\n" + "="*80)

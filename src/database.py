@@ -79,12 +79,15 @@ class Database:
                 frequency INTEGER,
                 rank INTEGER,
                 keyword_bucket TEXT DEFAULT 'niche',
+                win_ratio REAL DEFAULT 0.0,
+                keyword_win_check INTEGER DEFAULT 0,
                 PRIMARY KEY (session_id, keyword),
                 FOREIGN KEY (session_id) REFERENCES sessions(session_id)
             )
         """)
 
         self._migrate_keywords_bucket(cursor)
+        self._migrate_keywords_win_ratio(cursor)
 
         # Jobs table (web UI job tracking)
         cursor.execute("""
@@ -154,6 +157,24 @@ class Database:
             try:
                 cursor.execute(
                     "ALTER TABLE keywords ADD COLUMN keyword_bucket TEXT DEFAULT 'niche'"
+                )
+            except sqlite3.OperationalError:
+                pass
+
+    def _migrate_keywords_win_ratio(self, cursor):
+        cursor.execute("PRAGMA table_info(keywords)")
+        cols = [row[1] for row in cursor.fetchall()]
+        if cols and "win_ratio" not in cols:
+            try:
+                cursor.execute(
+                    "ALTER TABLE keywords ADD COLUMN win_ratio REAL DEFAULT 0.0"
+                )
+            except sqlite3.OperationalError:
+                pass
+        if cols and "keyword_win_check" not in cols:
+            try:
+                cursor.execute(
+                    "ALTER TABLE keywords ADD COLUMN keyword_win_check INTEGER DEFAULT 0"
                 )
             except sqlite3.OperationalError:
                 pass
@@ -259,8 +280,8 @@ class Database:
         for item in keywords_data:
             cursor.execute("""
                 INSERT OR REPLACE INTO keywords
-                (session_id, keyword, keyword_type, frequency, rank, keyword_bucket)
-                VALUES (?, ?, ?, ?, ?, ?)
+                (session_id, keyword, keyword_type, frequency, rank, keyword_bucket, win_ratio, keyword_win_check)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 session_id,
                 item['keyword'],
@@ -268,6 +289,8 @@ class Database:
                 item['frequency'],
                 item['rank'],
                 item.get('keyword_bucket', 'niche'),
+                item.get('win_ratio', 0.0),
+                1 if item.get('keyword_win_check') else 0,
             ))
         
         conn.commit()

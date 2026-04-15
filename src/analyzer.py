@@ -144,6 +144,32 @@ def compute_growth(snapshots_t1: List[Dict[str, Any]],
 
     return results
 
+def _extract_ngrams(title: str, min_word_len: int, stopwords: set, max_ngram: int):
+    """
+    Extract n-grams (contiguous phrases) from a title.
+    Returns list of (phrase, type) tuples.
+    """
+    cleaned = clean_title(title)
+    words = cleaned.split()
+    # Remove stopwords and short words
+    words = [
+        w for w in words
+        if w not in stopwords and len(w) >= min_word_len
+    ]
+    phrases = []
+    # Unigrams
+    for w in words:
+        phrases.append((w, 'unigram'))
+    # Bigrams
+    for i in range(len(words) - 1):
+        phrases.append((f"{words[i]} {words[i+1]}", 'bigram'))
+    # Trigrams
+    if max_ngram >= 3:
+        for i in range(len(words) - 2):
+            phrases.append((f"{words[i]} {words[i+1]} {words[i+2]}", 'trigram'))
+    return phrases
+
+
 def extract_keywords(
     analysis_results: List[Dict[str, Any]],
     top_n: int = None,
@@ -157,6 +183,7 @@ def extract_keywords(
         analysis_results: Analysis results sorted by rank
         top_n: Number of top products to extract keywords from (defaults to config)
         seo_keywords_raw: Text từ user — các từ/cụm coi là SEO template để tách cột niche
+        win_keywords_raw: Text từ user — các từ/cụm muốn kiểm tra mức độ win
 
     Returns:
         List of keyword rows with keyword_seo / keyword_niche (một trong hai có giá trị), type, rank
@@ -168,174 +195,52 @@ def extract_keywords(
     win_keywords = parse_win_keywords(win_keywords_raw)
     win_keywords_set = set(win_keywords)
 
-    # Precompute evaluation products for "win" criteria.
-    # - time_ok: t2 - t1 > 6h (chỉ cần như ý kiến của bạn)
-    # - delta filters: delta > 20, delta > 5
-    eval_products: List[Dict[str, Any]] = []
+    min_word_len = config.KEYWORD_CONFIG['min_word_length']
+    stopwords = config.KEYWORD_CONFIG['generic_stopwords']
+    max_ngram = config.KEYWORD_CONFIG['max_ngram_size']
+
+    # ─── Pass 1: Build phrase -> {products} and phrase -> {growing_products} ─
+    # Using ALL products in analysis_results (not just top N) for accurate A/B ratio
+    phrase_to_products: Dict[str, set] = {}
+    phrase_to_growing: Dict[str, set] = {}  # products with delta > 0
+    phrase_total_delta: Dict[str, float] = {}  # for avg_delta tiebreaker
+
     for r in analysis_results:
         title = r.get("product_title") or ""
-        title_clean = clean_title(title)
-        if not title_clean:
-            continue
-
-        delta = r.get("delta")
-        if delta is None:
-            continue
-
-        t1 = _parse_db_timestamp(r.get("scanned_at_t1"))
-        t2 = _parse_db_timestamp(r.get("scanned_at_t2"))
-        time_ok = False
-        if t1 and t2:
-            time_ok = (t2 - t1).total_seconds() / 3600.0 > 6.0
-
-        eval_products.append(
-            {
-                "title": title_clean,
-                "delta": delta,
-                "time_ok": time_ok,
-            }
-        )
-
-    # Decide win flags for each user-provided keyword.
-    # - condition1: appears in >= 2 products with delta > 20
-    # - condition2: appears in >= 10 products with delta > 5 AND total occurrences >= 10
-    win_map: Dict[str, bool] = {}
-    for kw in win_keywords:
-        cond1_products = 0
-        cond2_products = 0
-        cond2_occurrences = 0
-        for p in eval_products:
-            if not p["time_ok"]:
-                continue
-            if kw not in p["title"]:
-                continue
-            if p["delta"] > 20:
-                cond1_products += 1
-            if p["delta"] > 5:
-                cond2_products += 1
-                cond2_occurrences += p["title"].count(kw)
-
-        win_map[kw] = (cond1_products >= 2) or (
-            cond2_products >= 10 and cond2_occurrences >= 10
-        )
-    
-    # Filter: only products with meaningful delta
-    filtered = [
-        r for r in analysis_results 
-        if r['delta'] >= config.TRACKING_CONFIG['min_delta_threshold']
-    ]
-    
-    # Take top N by delta
-    top_products = sorted(filtered, key=lambda x: x['delta'], reverse=True)[:top_n]
-    
-    if not top_products:
-        return []
-    
-    # Collect all keywords
-    unigrams = Counter()
-    bigrams = Counter()
-    trigrams = Counter()
-    
-    for product in top_products:
-        title = product['product_title']
         if not title:
             continue
-        
-        # Clean title
-        cleaned = clean_title(title)
-        
-        # Tokenize
-        words = cleaned.split()
-        
-        # Remove stopwords
-        words = [
-            w for w in words 
-            if w not in config.KEYWORD_CONFIG['generic_stopwords']
-            and len(w) >= config.KEYWORD_CONFIG['min_word_length']
-        ]
-        
-        # Extract n-grams
-        # Unigrams (1-word)
-        for word in words:
-            unigrams[word] += 1
-        
-        # Bigrams (2-word)
-        for i in range(len(words) - 1):
-            bigram = f"{words[i]} {words[i+1]}"
-            bigrams[bigram] += 1
-        
-        # Trigrams (3-word)
-        if config.KEYWORD_CONFIG['max_ngram_size'] >= 3:
-            for i in range(len(words) - 2):
-                trigram = f"{words[i]} {words[i+1]} {words[i+2]}"
-                trigrams[trigram] += 1
-    
-    # Combine all keywords
-    all_keywords = []
-    
-    # Add unigrams
-    for keyword, freq in unigrams.most_common(10):
-        all_keywords.append({
-            'keyword': keyword,
-            'keyword_type': 'unigram',
-            'frequency': freq,
-            'rank': 0  # Will be set later
-        })
-    
-    # Add bigrams
-    for keyword, freq in bigrams.most_common(10):
-        all_keywords.append({
-            'keyword': keyword,
-            'keyword_type': 'bigram',
-            'frequency': freq,
-            'rank': 0
-        })
-    
-    # Add trigrams
-    for keyword, freq in trigrams.most_common(10):
-        all_keywords.append({
-            'keyword': keyword,
-            'keyword_type': 'trigram',
-            'frequency': freq,
-            'rank': 0
-        })
-    
-    # Sort by frequency and assign ranks
-    all_keywords = sorted(all_keywords, key=lambda x: x['frequency'], reverse=True)
-    for rank, item in enumerate(all_keywords[:10], 1):  # Top 10 overall
-        item['rank'] = rank
+        product_id = r.get("product_id") or id(title)  # fallback to title-based id
+        delta = r.get("delta") or 0
+        is_growing = delta > 0
 
-    top = all_keywords[:10]
+        ngrams = _extract_ngrams(title, min_word_len, stopwords, max_ngram)
+        seen_phrases: set = set()  # deduplicate within same product
 
-    # Attach SEO bucket + win flag to extracted keywords.
-    for item in top:
-        kw = item["keyword"]
-        bucket = classify_keyword_bucket(kw, seo_set)
-        item["keyword_bucket"] = bucket
-        item["keyword_seo"] = kw if bucket == "seo" else ""
-        item["keyword_niche"] = kw if bucket == "niche" else ""
-        item["keyword_win_check"] = (
-            win_map.get(kw) if kw in win_keywords_set else ""
-        )
-
-    # Ensure user win-keywords are present in output rows.
-    existing_keywords = {it["keyword"] for it in top}
-    extra_items: List[Dict[str, Any]] = []
-    for kw in win_keywords:
-        if kw in existing_keywords:
-            continue
-
-        freq = 0
-        any_found = False
-        for product in top_products:
-            cleaned_title = clean_title(product.get("product_title") or "")
-            if kw not in cleaned_title:
+        for phrase, _ in ngrams:
+            if phrase in seen_phrases:
                 continue
-            any_found = True
-            freq += cleaned_title.count(kw)
+            seen_phrases.add(phrase)
 
-        # Infer keyword_type by token count (consistent with sheet).
-        tok_count = len(kw.split())
+            if phrase not in phrase_to_products:
+                phrase_to_products[phrase] = set()
+                phrase_to_growing[phrase] = set()
+                phrase_total_delta[phrase] = 0.0
+
+            phrase_to_products[phrase].add(product_id)
+            if is_growing:
+                phrase_to_growing[phrase].add(product_id)
+            phrase_total_delta[phrase] += delta
+
+    # ─── Pass 2: Compute win metrics for all phrases ───────────────────────────
+    all_keywords_data: Dict[str, Dict[str, Any]] = {}
+    for phrase, products in phrase_to_products.items():
+        A = len(products)
+        B = len(phrase_to_growing[phrase])
+        win_ratio = (B / A) if A > 0 else 0.0
+        avg_delta = (phrase_total_delta[phrase] / A) if A > 0 else 0.0
+
+        # Determine keyword_type from token count
+        tok_count = len(phrase.split())
         if tok_count == 1:
             keyword_type = "unigram"
         elif tok_count == 2:
@@ -345,30 +250,83 @@ def extract_keywords(
         else:
             keyword_type = "phrase"
 
-        bucket = classify_keyword_bucket(kw, seo_set)
-        extra_items.append(
-            {
+        all_keywords_data[phrase] = {
+            "keyword": phrase,
+            "keyword_type": keyword_type,
+            "frequency": A,  # unique products count
+            "A": A,
+            "B": B,
+            "win_ratio": win_ratio,
+            "keyword_win_check": win_ratio > 0.05,
+            "avg_delta": avg_delta,
+        }
+
+    # ─── Pass 3: Filter to top N by delta + extract from those products ────────
+    # Get top N products by delta for keyword extraction (phrase pool)
+    filtered = [
+        r for r in analysis_results
+        if r.get('delta', 0) >= config.TRACKING_CONFIG['min_delta_threshold']
+    ]
+    top_products = sorted(filtered, key=lambda x: x.get('delta', 0), reverse=True)[:top_n]
+
+    if not top_products:
+        return []
+
+    # Extract phrases from top products to determine which phrases to include in output
+    # (Only include phrases that appear in at least 1 top product)
+    top_product_phrases: set = set()
+    for product in top_products:
+        title = product.get("product_title") or ""
+        ngrams = _extract_ngrams(title, min_word_len, stopwords, max_ngram)
+        for phrase, _ in ngrams:
+            top_product_phrases.add(phrase)
+
+    # ─── Pass 4: Add win_keywords (user-provided) even if not in top products ──
+    for kw in win_keywords:
+        if kw not in all_keywords_data:
+            tok_count = len(kw.split())
+            if tok_count == 1:
+                keyword_type = "unigram"
+            elif tok_count == 2:
+                keyword_type = "bigram"
+            elif tok_count == 3:
+                keyword_type = "trigram"
+            else:
+                keyword_type = "phrase"
+            all_keywords_data[kw] = {
                 "keyword": kw,
                 "keyword_type": keyword_type,
-                "frequency": freq,
-                "rank": 0,
-                "keyword_bucket": bucket,
-                "keyword_seo": kw if bucket == "seo" else "",
-                "keyword_niche": kw if bucket == "niche" else "",
-                "keyword_win_check": win_map.get(kw, False),
-                # If user keyword never appears in the extracted pool, keep it but let freq drive rank.
-                "_any_found": any_found,
+                "frequency": 0,
+                "A": 0,
+                "B": 0,
+                "win_ratio": 0.0,
+                "keyword_win_check": False,
+                "avg_delta": 0.0,
             }
-        )
 
-    out_items = top + extra_items
-    out_items = sorted(out_items, key=lambda x: x.get("frequency", 0), reverse=True)
+    # ─── Pass 5: Build final list (phrases from top products + user win_keywords) ─
+    out_items: List[Dict[str, Any]] = []
+
+    # Add phrases that appear in top products
+    for phrase, data in all_keywords_data.items():
+        if phrase in top_product_phrases or phrase in win_keywords_set:
+            out_items.append(data.copy())
+
+    # Sort by frequency desc, then avg_delta desc
+    out_items.sort(key=lambda x: (-x["frequency"], -x["avg_delta"]))
+
+    # Assign rank and SEO bucket
     for rank, item in enumerate(out_items, start=1):
+        kw = item["keyword"]
+        bucket = classify_keyword_bucket(kw, seo_set)
         item["rank"] = rank
+        item["keyword_bucket"] = bucket
+        item["keyword_seo"] = kw if bucket == "seo" else ""
+        item["keyword_niche"] = kw if bucket == "niche" else ""
 
-    # Drop internal helper key.
-    for item in out_items:
-        item.pop("_any_found", None)
+        # Override win_check for user-provided keywords
+        if kw in win_keywords_set:
+            item["keyword_win_check"] = item.get("keyword_win_check", False)
 
     return out_items
 
